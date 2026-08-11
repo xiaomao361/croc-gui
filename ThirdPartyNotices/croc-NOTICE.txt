@@ -1,0 +1,11 @@
+croc core attribution
+
+This application is an independent macOS GUI for croc.
+
+The file-transfer core, protocol implementation, and bundled command-line
+program are from the original croc project created by Zack (schollz) and its
+contributors. This application is not the official croc app.
+
+Original project: https://github.com/schollz/croc
+Official website: https://getcroc.com/
+License: MIT; see croc-LICENSE.txt in this directory.
