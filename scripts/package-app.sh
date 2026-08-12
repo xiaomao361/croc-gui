@@ -3,7 +3,9 @@ set -euo pipefail
 
 SCRIPT_DIR=${0:A:h}
 PROJECT_DIR=${SCRIPT_DIR:h}
-CROC_CORE=${CROC_CORE:-/Users/zhouwei/go/croc-gui/croc_macos_arm64}
+if [[ -z ${CROC_CORE:-} ]]; then
+    CROC_CORE=$("$SCRIPT_DIR/fetch-croc-core.sh")
+fi
 SIGN_IDENTITY=${SIGN_IDENTITY:--}
 OUTPUT_DIR="$PROJECT_DIR/.build/package"
 VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$PROJECT_DIR/Packaging/Info.plist")
@@ -12,6 +14,12 @@ FINAL_ZIP="$OUTPUT_DIR/croc-$VERSION-arm64.zip"
 
 if [[ ! -x "$CROC_CORE" ]]; then
     print -u2 "croc core is not executable: $CROC_CORE"
+    exit 2
+fi
+
+CORE_VERSION=$("$CROC_CORE" --version)
+if [[ "$CORE_VERSION" != "croc version 10.7.0" ]]; then
+    print -u2 "unexpected croc core version: $CORE_VERSION"
     exit 2
 fi
 

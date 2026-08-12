@@ -31,8 +31,10 @@ struct CodeGateMark: View {
 
 enum CrocButtonKind: Equatable {
     case primary
+    case success
     case secondary
     case destructive
+    case destructiveFilled
     case mode(selected: Bool)
 }
 
@@ -74,7 +76,7 @@ struct CrocButtonStyle: ButtonStyle {
 
     private var foregroundColor: Color {
         switch kind {
-        case .primary: .white
+        case .primary, .success, .destructiveFilled: .white
         case .secondary: CrocPalette.forest
         case .destructive: CrocPalette.danger
         case let .mode(selected): selected ? .white : CrocPalette.forest
@@ -85,10 +87,16 @@ struct CrocButtonStyle: ButtonStyle {
         switch kind {
         case .primary:
             return configuration.isPressed ? CrocPalette.forest : CrocPalette.forestBright
+        case .success:
+            return configuration.isPressed ? CrocPalette.forestBright : CrocPalette.forest
         case .secondary:
             return configuration.isPressed ? CrocPalette.forest.opacity(0.12) : .white.opacity(0.82)
         case .destructive:
             return configuration.isPressed ? CrocPalette.danger.opacity(0.18) : CrocPalette.danger.opacity(0.08)
+        case .destructiveFilled:
+            return configuration.isPressed
+                ? Color(red: 0.480, green: 0.118, blue: 0.094)
+                : CrocPalette.danger
         case let .mode(selected):
             if selected {
                 return configuration.isPressed ? CrocPalette.forest : CrocPalette.forestBright
@@ -99,16 +107,17 @@ struct CrocButtonStyle: ButtonStyle {
 
     private var borderColor: Color {
         switch kind {
-        case .primary: CrocPalette.forest.opacity(0.35)
+        case .primary, .success: CrocPalette.forest.opacity(0.35)
         case .secondary: CrocPalette.forest.opacity(0.18)
         case .destructive: CrocPalette.danger.opacity(0.22)
+        case .destructiveFilled: Color.white.opacity(0.18)
         case let .mode(selected): selected ? .clear : CrocPalette.forest.opacity(0.10)
         }
     }
 
     private var shadowColor: Color {
         switch kind {
-        case .primary, .mode(selected: true): .black.opacity(0.14)
+        case .primary, .success, .destructiveFilled, .mode(selected: true): .black.opacity(0.14)
         default: .black.opacity(0.06)
         }
     }

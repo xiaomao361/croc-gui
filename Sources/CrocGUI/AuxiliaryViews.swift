@@ -16,14 +16,28 @@ struct TransferDetailsView: View {
             }
 
             HStack {
-                Label(store.statusTitle, systemImage: store.phase.menuBarSymbol)
+                VStack(alignment: .leading, spacing: 3) {
+                    Label(store.statusTitle, systemImage: store.phase.menuBarSymbol)
+                    Text(store.statusDetail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
                 Spacer()
-                if store.phase.isRunning {
+                if store.phase.isRunning, store.phase != .cancelling {
                     Button { store.cancel() } label: {
                         Label("Cancel", systemImage: "xmark")
                     }
                     .buttonStyle(CrocButtonStyle(kind: .destructive))
                 }
+            }
+
+            if let progress = store.progress, store.phase.isRunning {
+                ProgressView(value: progress)
+                    .progressViewStyle(.linear)
+                    .tint(store.phase == .cancelling ? Color.secondary : CrocPalette.forestBright)
+                    .accessibilityLabel(store.statusTitle)
+                    .accessibilityValue("\(Int(progress * 100)) percent")
             }
 
             ScrollView {
@@ -96,15 +110,50 @@ struct SettingsView: View {
                 }
 
                 Section("croc CLI") {
-                    HStack {
-                        TextField("Automatically detected", text: $store.executableOverride)
-                        Button("Choose…") { chooseExecutable() }
-                            .buttonStyle(CrocButtonStyle(kind: .secondary))
+                    settingsValueRow(label: "Core version") {
+                        Text(store.coreInfo.displayLabel)
+                            .foregroundStyle(store.coreInfo.state == .unavailable ? CrocPalette.danger : .secondary)
+                            .textSelection(.enabled)
+                            .lineLimit(1)
                     }
-                    Text(store.executableURL?.path ?? "No executable found")
-                        .font(.caption)
-                        .foregroundStyle(store.executableURL == nil ? CrocPalette.danger : .secondary)
-                        .textSelection(.enabled)
+
+                    settingsValueRow(label: "App version") {
+                        Text(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Development")
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(spacing: 12) {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("Executable")
+                                    .font(.body)
+                                Text(store.executableOverride.isEmpty ? "Selected automatically" : "Custom executable")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+
+                            Spacer(minLength: 16)
+
+                            if !store.executableOverride.isEmpty {
+                                Button("Use automatic") { store.executableOverride = "" }
+                                    .buttonStyle(CrocButtonStyle(kind: .secondary))
+                                    .fixedSize()
+                            }
+
+                            Button("Choose…") { chooseExecutable() }
+                                .buttonStyle(CrocButtonStyle(kind: .secondary))
+                                .fixedSize()
+                        }
+
+                        Text(store.executableURL?.path ?? "No executable found")
+                            .font(.caption.monospaced())
+                            .foregroundStyle(store.executableURL == nil ? CrocPalette.danger : .secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .textSelection(.enabled)
+                            .help(store.executableURL?.path ?? "No executable found")
+                    }
                 }
 
                 Section("Original croc project") {
@@ -114,26 +163,42 @@ struct SettingsView: View {
 
                     HStack(spacing: 12) {
                         Link(destination: URL(string: "https://github.com/schollz/croc")!) {
-                            Label("View croc on GitHub", systemImage: "link")
+                            Label("croc GitHub", systemImage: "link")
+                                .lineLimit(1)
                         }
                         .buttonStyle(CrocButtonStyle(kind: .secondary))
 
                         Link(destination: URL(string: "https://getcroc.com/")!) {
-                            Label("Visit getcroc.com", systemImage: "globe")
+                            Label("croc website", systemImage: "globe")
+                                .lineLimit(1)
                         }
                         .buttonStyle(CrocButtonStyle(kind: .secondary))
 
                         Link(destination: URL(string: "https://github.com/schollz/croc/blob/main/LICENSE")!) {
-                            Label("Read the MIT license", systemImage: "doc.text")
+                            Label("MIT license", systemImage: "doc.text")
+                                .lineLimit(1)
                         }
                         .buttonStyle(CrocButtonStyle(kind: .secondary))
+
+                        Spacer(minLength: 0)
                     }
                 }
             }
             .formStyle(.grouped)
         }
         .padding(22)
-        .frame(minWidth: 600, minHeight: 430)
+        .frame(minWidth: 680, minHeight: 470)
+    }
+
+    private func settingsValueRow<Content: View>(
+        label: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        HStack(spacing: 16) {
+            Text(label)
+            Spacer(minLength: 24)
+            content()
+        }
     }
 
     private func chooseExecutable() {

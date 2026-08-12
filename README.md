@@ -12,9 +12,14 @@ An independent native SwiftUI GUI for [croc](https://github.com/schollz/croc). T
 - Receive with a croc code phrase and choose the output folder
 - Copy the generated code phrase
 - Use croc's default relay or configure a custom relay
-- Show transfer output and progress, and cancel a running process
+- Show live transfer progress, byte counts, speed, ETA, and inactivity status
+- Automatically resume an existing partial file when croc offers a safe resume
+- Prevent idle system sleep during a transfer and keep the window open until it finishes or is cancelled
+- Confirm process exit before reporting cancellation, with a forced-stop fallback for an unresponsive core
+- Show the active croc core version plus completion time, duration, destination, and a Finder shortcut
+- Explain common secure-channel, relay, and destination failures while preserving the full core log
 
-The Swift app is a process wrapper; it does not reimplement or fork the croc protocol. Receive secrets are passed with `CROC_SECRET` and are deliberately omitted from the visible command log. The GUI owns the explicit copy action, so the wrapped sender disables croc's automatic clipboard write.
+The Swift app is a process wrapper; it does not reimplement or fork the croc protocol. Receive secrets are passed with `CROC_SECRET` and are deliberately omitted from the visible command log. The GUI owns the explicit copy action, so the wrapped sender disables croc's automatic clipboard write. Packaged builds pin and checksum the official croc v10.7.0 macOS ARM64 binary, retaining the v10 protocol line for compatibility with existing receivers.
 
 ## Original croc attribution
 
@@ -48,7 +53,7 @@ swift build
 
 ## Package a local trial app
 
-The local packaging script builds an arm64 app, embeds a croc CLI, generates the Code Gate icon, and applies an ad-hoc signature:
+The local packaging script builds an arm64 app, downloads and verifies the pinned official croc core when needed, generates the Code Gate icon, and applies an ad-hoc signature:
 
 ```sh
 ./scripts/package-app.sh
@@ -67,7 +72,7 @@ Download the latest signed and notarized build from [GitHub Releases](https://gi
 
 Open the DMG and drag `croc.app` to Applications. The ZIP contains the same notarized application for users who prefer a direct archive.
 
-Release `v0.1.6` is signed with Developer ID team `A5L4GGX82X`, accepted by Apple's notarization service, and validated by Gatekeeper as `Notarized Developer ID`. Published SHA-256 hashes are included with the Release assets.
+Release `v0.2.0` is signed with Developer ID team `A5L4GGX82X`, accepted by Apple's notarization service, and validated by Gatekeeper as `Notarized Developer ID`.
 
 ## Create a signed release
 

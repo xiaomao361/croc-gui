@@ -15,7 +15,7 @@ struct ContentView: View {
             statusFooter
         }
         .background(CrocPalette.canvas)
-        .background(WindowLayoutConfigurator())
+        .background(WindowLayoutConfigurator(preventsClosing: store.phase.isRunning))
         .tint(CrocPalette.forestBright)
         .onAppear { NSApp.activate() }
         .sheet(isPresented: $store.showDetails) {
@@ -120,6 +120,7 @@ struct ContentView: View {
                         .frame(width: 48, height: 48)
                         .background(Color.white.opacity(0.07))
                         .clipShape(.rect(cornerRadius: 11))
+                        .accessibilityHidden(true)
 
                     VStack(alignment: .leading, spacing: 5) {
                         Text(item.isDirectory ? "Folder selected" : "File selected")
@@ -127,25 +128,30 @@ struct ContentView: View {
                             .tracking(0.8)
                             .foregroundStyle(CrocPalette.forestMuted)
 
-                    Text(item.name)
-                        .font(.title3.weight(.semibold))
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
-                    Text(itemMetadata(item))
-                        .font(.caption)
-                        .foregroundStyle(Color.white.opacity(0.62))
-                        .lineLimit(1)
+                        Text(item.name)
+                            .font(.title3.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .help(item.name)
+                        Text(itemMetadata(item))
+                            .font(.caption)
+                            .foregroundStyle(Color.white.opacity(0.62))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .help(itemMetadata(item))
                     }
 
                     Spacer(minLength: 16)
 
-                    Button {
-                        store.clearSelectedItem()
-                    } label: {
-                        Label("Remove", systemImage: "xmark")
+                    if !store.phase.isRunning {
+                        Button {
+                            store.clearSelectedItem()
+                        } label: {
+                            Label("Remove", systemImage: "xmark")
+                        }
+                        .buttonStyle(CrocButtonStyle(kind: .destructiveFilled))
                     }
-                    .buttonStyle(CrocButtonStyle(kind: .destructive))
-                    .disabled(store.phase.isRunning)
                 }
             } else {
                 HStack(alignment: .center, spacing: 18) {
@@ -155,6 +161,7 @@ struct ContentView: View {
                         .frame(width: 58, height: 58)
                         .background(CrocPalette.forestBright.opacity(0.09))
                         .clipShape(.rect(cornerRadius: 13))
+                        .accessibilityHidden(true)
 
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Drop a file or folder here")
@@ -167,28 +174,34 @@ struct ContentView: View {
                 }
             }
 
-            HStack(spacing: 12) {
-                Button {
-                    chooseTransferFolder()
-                } label: {
-                    Label(store.selectedItem == nil ? "Choose folder" : "Choose another folder", systemImage: "folder.fill")
+            if store.phase.isRunning {
+                Label("File selection is locked during transfer", systemImage: "lock.fill")
+                    .font(.callout)
+                    .foregroundStyle(Color.white.opacity(0.72))
+            } else {
+                HStack(spacing: 12) {
+                    Button {
+                        chooseTransferFolder()
+                    } label: {
+                        Label(store.selectedItem == nil ? "Choose folder" : "Choose another folder", systemImage: "folder.fill")
+                    }
+                    .buttonStyle(CrocButtonStyle(kind: .primary))
+                    .keyboardShortcut("o", modifiers: [.command, .shift])
+
+                    Button {
+                        chooseTransferFile()
+                    } label: {
+                        Label(store.selectedItem == nil ? "Choose file" : "Choose another file", systemImage: "doc")
+                    }
+                    .buttonStyle(CrocButtonStyle(kind: .secondary))
+                    .keyboardShortcut("o", modifiers: .command)
+
+                    Spacer()
+
+                    Label("Drag and drop supported", systemImage: "arrow.down.to.line")
+                        .font(.caption)
+                        .foregroundStyle(isEmpty ? CrocPalette.olive : Color.white.opacity(0.62))
                 }
-                .buttonStyle(CrocButtonStyle(kind: .primary))
-                .disabled(store.phase.isRunning)
-
-                Button {
-                    chooseTransferFile()
-                } label: {
-                    Label(store.selectedItem == nil ? "Choose file" : "Choose another file", systemImage: "doc")
-                }
-                .buttonStyle(CrocButtonStyle(kind: .secondary))
-                .disabled(store.phase.isRunning)
-
-                Spacer()
-
-                Label("Drag and drop supported", systemImage: "arrow.down.to.line")
-                    .font(.caption)
-                    .foregroundStyle(isEmpty ? CrocPalette.olive : Color.white.opacity(0.62))
             }
         }
         .padding(22)
@@ -205,11 +218,11 @@ struct ContentView: View {
                 )
         }
         .shadow(color: .black.opacity(0.08), radius: 4, y: 2)
-        .dropDestination(for: URL.self) { urls, _ in
-            guard let first = urls.first else { return false }
-            store.select(first)
-            return true
-        } isTargeted: { isDropTargeted = $0 }
+        .background {
+            NativeFileDropTarget(isEnabled: !store.phase.isRunning, isTargeted: $isDropTargeted) { url in
+                store.select(url)
+            }
+        }
         .accessibilityHint("Accepts a dropped file or folder")
     }
 
@@ -236,19 +249,20 @@ struct ContentView: View {
                 }
                 .buttonStyle(CrocButtonStyle(kind: .primary))
                 .disabled(store.executableURL == nil || !store.isRelayConfigurationValid)
+                .keyboardShortcut(.defaultAction)
 
-                if !store.isRelayConfigurationValid {
+                if setupBlockingMessage != nil {
                     Button {
                         showsSettings = true
                     } label: {
-                        Label("Configure relay", systemImage: "gearshape")
+                        Label("Open settings", systemImage: "gearshape")
                     }
                     .buttonStyle(CrocButtonStyle(kind: .secondary))
                 }
             }
 
-            if !store.isRelayConfigurationValid {
-                Label("Enter a custom relay address before starting.", systemImage: "exclamationmark.circle.fill")
+            if let setupBlockingMessage {
+                Label(setupBlockingMessage, systemImage: "exclamationmark.circle.fill")
                     .font(.callout)
                     .foregroundStyle(CrocPalette.danger)
             }
@@ -273,20 +287,18 @@ struct ContentView: View {
                 .foregroundStyle(CrocPalette.ink)
                 .textSelection(.enabled)
                 .minimumScaleFactor(0.64)
+                .lineLimit(1)
+                .help(store.codePhrase)
 
             HStack(spacing: 12) {
-                Button {
-                    store.copyCode()
-                } label: {
-                    Label("Copy code phrase", systemImage: "doc.on.doc")
-                }
-                .buttonStyle(CrocButtonStyle(kind: .primary))
+                CopyFeedbackButton("Copy code phrase", kind: .primary, action: store.copyCode)
 
                 if let notice = store.clipboardNotice {
                     Label(notice, systemImage: "checkmark.circle.fill")
                         .font(.callout)
                         .foregroundStyle(CrocPalette.forestBright)
                         .accessibilityLabel(notice)
+                        .accessibilityAddTraits(.updatesFrequently)
                 }
             }
 
@@ -307,12 +319,7 @@ struct ContentView: View {
                     .tracking(0.8)
                     .foregroundStyle(CrocPalette.olive)
                 Spacer()
-                Button {
-                    store.copyReceiveInstructions()
-                } label: {
-                    Label("Copy all", systemImage: "doc.on.doc")
-                }
-                .buttonStyle(CrocButtonStyle(kind: .secondary))
+                CopyFeedbackButton("Copy all", kind: .secondary, action: store.copyReceiveInstructions)
             }
 
             if let command = store.windowsReceiveCommand {
@@ -337,12 +344,12 @@ struct ContentView: View {
                     .font(.system(.callout, design: .monospaced))
                     .foregroundStyle(.primary)
                     .textSelection(.enabled)
+                    .lineLimit(2)
+                    .truncationMode(.middle)
+                    .help(command)
             }
             Spacer(minLength: 12)
-            Button(action: copy) {
-                Label("Copy", systemImage: "doc.on.doc")
-            }
-            .buttonStyle(CrocButtonStyle(kind: .secondary))
+            CopyFeedbackButton("Copy", kind: .secondary, action: copy)
         }
         .padding(12)
         .background(Color.white.opacity(0.68))
@@ -367,10 +374,20 @@ struct ContentView: View {
                         .font(.body)
                         .foregroundStyle(CrocPalette.olive)
 
-                    TextField("8527-credit-tuna-radio", text: $store.receiveCode)
-                        .textFieldStyle(.roundedBorder)
-                        .font(.title3.monospaced())
-                        .onSubmit { store.beginReceive() }
+                    VStack(alignment: .leading, spacing: 7) {
+                        Text("Code phrase")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(CrocPalette.olive)
+                        TextField("8527-credit-tuna-radio", text: $store.receiveCode)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.title3.monospaced())
+                            .accessibilityLabel("Receive code phrase")
+                            .onSubmit {
+                                if canBeginReceive {
+                                    store.beginReceive()
+                                }
+                            }
+                    }
 
                     HStack(spacing: 14) {
                         Image(systemName: "folder")
@@ -383,6 +400,7 @@ struct ContentView: View {
                                 .font(.callout)
                                 .lineLimit(1)
                                 .truncationMode(.middle)
+                                .help(store.outputDirectory.path)
                         }
                         Spacer()
                         Button("Change…") { chooseOutputDirectory() }
@@ -399,11 +417,26 @@ struct ContentView: View {
                             Label("Receive", systemImage: "arrow.down.circle.fill")
                         }
                         .buttonStyle(CrocButtonStyle(kind: .primary))
-                        .disabled(store.receiveCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || store.executableURL == nil)
+                        .disabled(!canBeginReceive)
+
+                        if setupBlockingMessage != nil {
+                            Button {
+                                showsSettings = true
+                            } label: {
+                                Label("Open settings", systemImage: "gearshape")
+                            }
+                            .buttonStyle(CrocButtonStyle(kind: .secondary))
+                        }
 
                         Label("End-to-end encrypted", systemImage: "lock.fill")
                             .font(.callout)
                             .foregroundStyle(CrocPalette.olive)
+                    }
+
+                    if let setupBlockingMessage {
+                        Label(setupBlockingMessage, systemImage: "exclamationmark.circle.fill")
+                            .font(.callout)
+                            .foregroundStyle(CrocPalette.danger)
                     }
                 }
                 .surfaceCard(minHeight: expandedHeight, alignment: .center)
@@ -422,6 +455,12 @@ struct ContentView: View {
                 .font(.body)
                 .foregroundStyle(CrocPalette.olive)
 
+            if let completionLocationDetail = store.completionLocationDetail {
+                Label(completionLocationDetail, systemImage: store.mode == .receive ? "folder" : "doc")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+
             HStack(spacing: 12) {
                 Button {
                     store.prepareNewTransfer()
@@ -430,11 +469,20 @@ struct ContentView: View {
                 }
                 .buttonStyle(CrocButtonStyle(kind: .primary))
 
-                if case .failed = store.phase {
+                if case .failed = store.phase, store.failureAllowsRetry {
                     Button {
                         store.mode == .send ? store.beginSend() : store.beginReceive()
                     } label: {
                         Label("Try again", systemImage: "arrow.clockwise")
+                    }
+                    .buttonStyle(CrocButtonStyle(kind: .secondary))
+                }
+
+                if store.completionLocationURL != nil {
+                    Button {
+                        store.revealCompletionLocation()
+                    } label: {
+                        Label("Show in Finder", systemImage: "folder")
                     }
                     .buttonStyle(CrocButtonStyle(kind: .secondary))
                 }
@@ -457,7 +505,9 @@ struct ContentView: View {
             if let progress = store.progress, store.phase.isRunning {
                 ProgressView(value: progress)
                     .progressViewStyle(.linear)
-                    .tint(CrocPalette.forestBright)
+                    .tint(store.phase == .cancelling ? Color.secondary : CrocPalette.forestBright)
+                    .accessibilityLabel(store.statusTitle)
+                    .accessibilityValue("\(Int(progress * 100)) percent")
             }
 
             HStack(spacing: 12) {
@@ -471,8 +521,12 @@ struct ContentView: View {
                     Text(store.statusDetail)
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                        .lineLimit(2)
+                        .monospacedDigit()
                 }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(store.statusTitle)
+                .accessibilityValue(store.statusDetail)
 
                 Spacer(minLength: 16)
 
@@ -488,12 +542,7 @@ struct ContentView: View {
     private var footerActions: some View {
         if store.phase.isRunning {
             if !store.codePhrase.isEmpty {
-                Button {
-                    store.copyCode()
-                } label: {
-                    Label("Copy code", systemImage: "doc.on.doc")
-                }
-                .buttonStyle(CrocButtonStyle(kind: .secondary))
+                CopyFeedbackButton("Copy code", kind: .secondary, action: store.copyCode)
             }
 
             Button {
@@ -503,12 +552,14 @@ struct ContentView: View {
             }
             .buttonStyle(CrocButtonStyle(kind: .secondary))
 
-            Button {
-                store.cancel()
-            } label: {
-                Label("Cancel", systemImage: "xmark")
+            if store.phase != .cancelling {
+                Button {
+                    store.cancel()
+                } label: {
+                    Label("Cancel", systemImage: "xmark")
+                }
+                .buttonStyle(CrocButtonStyle(kind: .destructive))
             }
-            .buttonStyle(CrocButtonStyle(kind: .destructive))
         }
     }
 
@@ -519,6 +570,22 @@ struct ContentView: View {
         case .cancelled: .secondary
         default: CrocPalette.forestMuted
         }
+    }
+
+    private var canBeginReceive: Bool {
+        !store.receiveCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+        store.executableURL != nil &&
+        store.isRelayConfigurationValid
+    }
+
+    private var setupBlockingMessage: String? {
+        if store.executableURL == nil {
+            return "Choose a croc executable in Settings before starting."
+        }
+        if !store.isRelayConfigurationValid {
+            return "Enter a custom relay address in Settings before starting."
+        }
+        return nil
     }
 
     private func itemMetadata(_ item: SelectedTransferItem) -> String {
@@ -557,6 +624,46 @@ struct ContentView: View {
         panel.prompt = "Save Here"
         if panel.runModal() == .OK, let url = panel.url {
             store.setOutputDirectory(url)
+        }
+    }
+}
+
+private struct CopyFeedbackButton: View {
+    let title: String
+    let kind: CrocButtonKind
+    let action: () -> Void
+
+    @State private var isCopied = false
+    @State private var resetTask: Task<Void, Never>?
+
+    init(_ title: String, kind: CrocButtonKind, action: @escaping () -> Void) {
+        self.title = title
+        self.kind = kind
+        self.action = action
+    }
+
+    var body: some View {
+        Button {
+            action()
+            resetTask?.cancel()
+            withAnimation(.easeOut(duration: 0.12)) {
+                isCopied = true
+            }
+            resetTask = Task {
+                try? await Task.sleep(for: .seconds(1.6))
+                guard !Task.isCancelled else { return }
+                withAnimation(.easeOut(duration: 0.12)) {
+                    isCopied = false
+                }
+            }
+        } label: {
+            Label(isCopied ? "Copied" : title, systemImage: isCopied ? "checkmark" : "doc.on.doc")
+                .contentTransition(.symbolEffect(.replace))
+        }
+        .buttonStyle(CrocButtonStyle(kind: isCopied ? .success : kind))
+        .accessibilityLabel(isCopied ? "Copied" : title)
+        .onDisappear {
+            resetTask?.cancel()
         }
     }
 }
