@@ -7,7 +7,7 @@ if [[ -z ${CROC_CORE:-} ]]; then
     CROC_CORE=$("$SCRIPT_DIR/fetch-croc-core.sh")
 fi
 SIGN_IDENTITY=${SIGN_IDENTITY:--}
-OUTPUT_DIR="$PROJECT_DIR/.build/package"
+OUTPUT_DIR=${CROC_PACKAGE_OUTPUT_DIR:-"$PROJECT_DIR/.build/package"}
 VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$PROJECT_DIR/Packaging/Info.plist")
 FINAL_APP="$OUTPUT_DIR/croc.app"
 FINAL_ZIP="$OUTPUT_DIR/croc-$VERSION-arm64.zip"

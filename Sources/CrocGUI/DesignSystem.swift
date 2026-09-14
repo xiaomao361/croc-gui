@@ -1,14 +1,14 @@
 import SwiftUI
 
 enum CrocPalette {
-    static let canvas = Color(red: 0.957, green: 0.957, blue: 0.961)
-    static let chrome = Color(red: 0.910, green: 0.914, blue: 0.922)
+    static let canvas = Color.white
+    static let chrome = Color(red: 0.965, green: 0.969, blue: 0.961)
     static let forest = Color(red: 0.122, green: 0.220, blue: 0.141)
-    static let forestBright = Color(red: 0.149, green: 0.310, blue: 0.122)
+    static let forestBright = Color(red: 0.157, green: 0.357, blue: 0.286)
     static let forestMuted = Color(red: 0.478, green: 0.780, blue: 0.522)
     static let cream = Color(red: 0.988, green: 0.980, blue: 0.929)
-    static let ink = Color(red: 0.122, green: 0.188, blue: 0.078)
-    static let olive = Color(red: 0.361, green: 0.380, blue: 0.290)
+    static let ink = Color(red: 0.141, green: 0.243, blue: 0.184)
+    static let olive = Color(red: 0.376, green: 0.420, blue: 0.380)
     static let danger = Color(red: 0.620, green: 0.200, blue: 0.161)
 }
 
@@ -46,10 +46,10 @@ struct CrocButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.callout.weight(.semibold))
+            .font(.callout.weight(.medium))
             .foregroundStyle(foregroundColor)
             .padding(.horizontal, 14)
-            .frame(minHeight: 40)
+            .frame(minHeight: 34)
             .background {
                 RoundedRectangle(cornerRadius: cornerRadius)
                     .fill(backgroundColor(configuration: configuration))
@@ -71,7 +71,7 @@ struct CrocButtonStyle: ButtonStyle {
 
     private var cornerRadius: CGFloat {
         if case .mode = kind { return 8 }
-        return 9
+        return 7
     }
 
     private var foregroundColor: Color {
@@ -117,8 +117,8 @@ struct CrocButtonStyle: ButtonStyle {
 
     private var shadowColor: Color {
         switch kind {
-        case .primary, .success, .destructiveFilled, .mode(selected: true): .black.opacity(0.14)
-        default: .black.opacity(0.06)
+        case .primary, .success, .destructiveFilled, .mode(selected: true): .black.opacity(0.05)
+        default: .clear
         }
     }
 }

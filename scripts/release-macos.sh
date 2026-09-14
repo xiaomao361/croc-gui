@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR=${0:A:h}
 PROJECT_DIR=${SCRIPT_DIR:h}
-OUTPUT_DIR="$PROJECT_DIR/.build/package"
+OUTPUT_DIR=${CROC_PACKAGE_OUTPUT_DIR:-"$PROJECT_DIR/.build/package"}
 VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$PROJECT_DIR/Packaging/Info.plist")
 ARCH=arm64
 SIGN_IDENTITY=${SIGN_IDENTITY:-"Developer ID Application: zhou wei (A5L4GGX82X)"}
@@ -15,7 +15,7 @@ CHECKSUMS="$OUTPUT_DIR/SHA256SUMS.txt"
 
 cd "$PROJECT_DIR"
 
-SIGN_IDENTITY="$SIGN_IDENTITY" "$SCRIPT_DIR/package-app.sh"
+CROC_PACKAGE_OUTPUT_DIR="$OUTPUT_DIR" SIGN_IDENTITY="$SIGN_IDENTITY" "$SCRIPT_DIR/package-app.sh"
 
 codesign --verify --deep --strict --verbose=2 "$FINAL_APP"
 xcrun notarytool submit "$FINAL_ZIP" --keychain-profile "$NOTARY_PROFILE" --wait

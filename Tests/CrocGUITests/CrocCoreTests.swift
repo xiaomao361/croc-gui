@@ -186,9 +186,9 @@ private final class FrameRecorder: @unchecked Sendable {
     let store = TransferStore(defaults: defaults)
     store.codePhrase = "8527-credit-tuna-radio"
 
-    #expect(store.windowsReceiveCommand == "croc 8527-credit-tuna-radio")
-    #expect(store.unixReceiveCommand == "CROC_SECRET=\"8527-credit-tuna-radio\" croc")
-    #expect(store.receiveInstructions?.contains("For Windows:") == true)
+    #expect(store.windowsReceiveCommand == "croc '8527-credit-tuna-radio'")
+    #expect(store.unixReceiveCommand == "CROC_SECRET='8527-credit-tuna-radio' croc")
+    #expect(store.receiveInstructions?.contains("For Windows (PowerShell):") == true)
     #expect(store.receiveInstructions?.contains("For Linux/macOS:") == true)
 }
 

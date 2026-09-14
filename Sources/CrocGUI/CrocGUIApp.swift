@@ -9,7 +9,7 @@ final class CrocAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard store?.phase.isRunning == true else { return .terminateNow }
+        guard store?.isBusy == true else { return .terminateNow }
 
         let alert = NSAlert()
         alert.alertStyle = .warning
@@ -33,11 +33,12 @@ struct CrocGUIApp: App {
     var body: some Scene {
         Window("croc", id: "main") {
             ContentView(store: store)
-                .frame(minWidth: 760, minHeight: 560)
+                .frame(minWidth: 520, minHeight: 400)
                 .preferredColorScheme(.light)
                 .onAppear { appDelegate.store = store }
         }
-        .defaultSize(width: 900, height: 620)
+        .defaultSize(width: 520, height: 440)
+        .windowToolbarStyle(.unifiedCompact)
         .windowResizability(.contentMinSize)
     }
 }

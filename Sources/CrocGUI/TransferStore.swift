@@ -16,6 +16,9 @@ final class TransferStore: ObservableObject {
     @Published private(set) var completedAt: Date?
     @Published private(set) var transferDuration: TimeInterval?
     @Published private(set) var failureAllowsRetry = true
+    @Published private(set) var failureRecovery: CrocRecoveryAction = .retry
+    @Published private(set) var transferContext: TransferContext?
+    @Published var selectionNotice: String?
     @Published var logLines: [String] = []
     @Published var showDetails = false
     @Published var clipboardNotice: String?
@@ -83,20 +86,40 @@ final class TransferStore: ObservableObject {
         !useCustomRelay || !configuredRelay.isEmpty
     }
 
+    var isBusy: Bool { phase.isRunning || runner.isRunning }
+
+    var canBeginSend: Bool {
+        !isBusy && selectedItem != nil && executableURL != nil && isRelayConfigurationValid
+    }
+
+    var canBeginReceive: Bool {
+        !isBusy && !receiveCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+        executableURL != nil && isRelayConfigurationValid
+    }
+
+    var displayedItem: SelectedTransferItem? { transferContext?.item ?? selectedItem }
+
+    var displayedOutputDirectory: URL { transferContext?.outputDirectory ?? outputDirectory }
+
+    var inactivityNotice: String? {
+        guard isBusy, let secondsSinceLastActivity, secondsSinceLastActivity >= 30 else { return nil }
+        return "No new output for \(TimeInterval(secondsSinceLastActivity).durationLabel). croc is still running."
+    }
+
     var windowsReceiveCommand: String? {
         guard !codePhrase.isEmpty else { return nil }
-        return "croc \(codePhrase)"
+        return CrocCommandBuilder.windowsReceiveInstruction(code: codePhrase, relay: transferContext?.relay ?? configuredRelay)
     }
 
     var unixReceiveCommand: String? {
         guard !codePhrase.isEmpty else { return nil }
-        return "CROC_SECRET=\"\(codePhrase)\" croc"
+        return CrocCommandBuilder.unixReceiveInstruction(code: codePhrase, relay: transferContext?.relay ?? configuredRelay)
     }
 
     var receiveInstructions: String? {
         guard let windowsReceiveCommand, let unixReceiveCommand else { return nil }
         return """
-        For Windows:
+        For Windows (PowerShell):
             \(windowsReceiveCommand)
 
         For Linux/macOS:
@@ -109,7 +132,7 @@ final class TransferStore: ObservableObject {
         case .idle: selectedItem == nil && mode == .send ? "Ready" : "Ready to transfer"
         case .preparing: progressSnapshot == nil ? "Starting croc" : "Preparing file"
         case .waiting: "Waiting for the receiver"
-        case .transferring: mode == .send ? "Sending securely" : "Receiving securely"
+        case .transferring: (transferContext?.mode ?? mode) == .send ? "Sending securely" : "Receiving securely"
         case .cancelling: "Cancelling transfer"
         case .completed: "Transfer complete"
         case .cancelled: "Transfer cancelled"
@@ -120,8 +143,8 @@ final class TransferStore: ObservableObject {
     var statusDetail: String {
         switch phase {
         case .idle: "End-to-end encrypted · No account or cloud storage"
-        case .preparing: progressSnapshot?.detailLabel ?? "Preparing the encrypted handoff"
-        case .waiting: "Share the code phrase with the receiver"
+        case .preparing: activityDetail(base: progressSnapshot?.detailLabel ?? "Preparing the encrypted handoff")
+        case .waiting: activityDetail(base: "Share the code phrase with the receiver")
         case .transferring:
             activityDetail(base: progressSnapshot?.detailLabel ?? "Transfer in progress")
         case .cancelling: "Waiting for croc to stop safely"
@@ -133,20 +156,26 @@ final class TransferStore: ObservableObject {
 
     var completionLocationDetail: String? {
         guard phase == .completed else { return nil }
-        if mode == .receive {
-            return "Saved to \(outputDirectory.abbreviatedDirectoryPath)"
+        if transferContext?.mode == .receive {
+            return "Saved to \(displayedOutputDirectory.abbreviatedDirectoryPath)"
         }
-        return selectedItem.map { "Sent \($0.name)" }
+        return displayedItem.map { "Sent \($0.name)" }
     }
 
     var completionLocationURL: URL? {
         guard phase == .completed else { return nil }
-        return mode == .receive ? outputDirectory : selectedItem?.url
+        return transferContext?.mode == .receive ? displayedOutputDirectory : displayedItem?.url
     }
 
     func select(_ url: URL) {
-        guard !phase.isRunning else { return }
+        guard !isBusy else { return }
+        guard FileManager.default.isReadableFile(atPath: url.path) else {
+            selectionNotice = "This item is unavailable or cannot be read. Choose another file or folder."
+            return
+        }
         selectedItem = .inspect(url)
+        transferContext = nil
+        selectionNotice = nil
         codePhrase = ""
         phase = .idle
         progress = nil
@@ -154,9 +183,22 @@ final class TransferStore: ObservableObject {
         clipboardNotice = nil
     }
 
+    @discardableResult
+    func acceptDrop(_ urls: [URL]) -> Bool {
+        guard !isBusy else { return false }
+        guard urls.count == 1, let url = urls.first else {
+            selectionNotice = "Drop one file or folder at a time. To send several files, put them in a folder first."
+            return false
+        }
+        select(url)
+        return selectionNotice == nil
+    }
+
     func clearSelectedItem() {
-        guard !phase.isRunning else { return }
+        guard !isBusy else { return }
         selectedItem = nil
+        transferContext = nil
+        selectionNotice = nil
         codePhrase = ""
         phase = .idle
         progress = nil
@@ -165,8 +207,10 @@ final class TransferStore: ObservableObject {
     }
 
     func changeMode(to newMode: TransferMode) {
-        guard !phase.isRunning, mode != newMode else { return }
+        guard !isBusy, mode != newMode else { return }
         mode = newMode
+        transferContext = nil
+        selectionNotice = nil
         phase = .idle
         codePhrase = ""
         progress = nil
@@ -175,27 +219,38 @@ final class TransferStore: ObservableObject {
     }
 
     func setOutputDirectory(_ url: URL) {
+        guard !isBusy else { return }
         outputDirectory = url
         defaults.set(url.path, forKey: Keys.outputDirectory)
     }
 
     func beginSend() {
+        guard !isBusy else { return }
         guard let selectedItem else { return }
+        transferContext = nil
         guard isRelayConfigurationValid else {
-            phase = .failed("Enter a custom relay address in Settings.")
+            fail("Enter a custom relay address in Settings.", recovery: .settings)
             return
         }
         start(command: CrocCommandBuilder.send(item: selectedItem.url, relay: configuredRelay))
     }
 
     func beginReceive() {
+        guard !isBusy else { return }
+        transferContext = nil
         let code = receiveCode.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !code.isEmpty else {
-            phase = .failed("Enter the sender's code phrase first.")
+            fail("Enter the sender's code phrase first.", recovery: .editCode)
             return
         }
         guard isRelayConfigurationValid else {
-            phase = .failed("Enter a custom relay address in Settings.")
+            fail("Enter a custom relay address in Settings.", recovery: .settings)
+            return
+        }
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: outputDirectory.path, isDirectory: &isDirectory),
+              isDirectory.boolValue, FileManager.default.isWritableFile(atPath: outputDirectory.path) else {
+            fail("Choose an existing, writable folder for received files.", recovery: .chooseDestination)
             return
         }
         start(command: CrocCommandBuilder.receive(code: code, output: outputDirectory, relay: configuredRelay))
@@ -232,26 +287,35 @@ final class TransferStore: ObservableObject {
     }
 
     func prepareNewTransfer() {
-        guard !phase.isRunning else { return }
-        phase = .idle
-        codePhrase = ""
+        guard !isBusy else { return }
+        editTransfer()
         receiveCode = ""
-        progress = nil
-        progressSnapshot = nil
-        secondsSinceLastActivity = nil
-        completedAt = nil
-        transferDuration = nil
-        failureAllowsRetry = true
-        clipboardNotice = nil
         logLines = []
         if mode == .send {
             selectedItem = nil
         }
     }
 
+    /// Return to the form without discarding the user's code or selected file.
+    func editTransfer() {
+        guard !isBusy else { return }
+        phase = .idle
+        codePhrase = ""
+        transferContext = nil
+        progress = nil
+        progressSnapshot = nil
+        secondsSinceLastActivity = nil
+        completedAt = nil
+        transferDuration = nil
+        failureAllowsRetry = true
+        failureRecovery = .retry
+        clipboardNotice = nil
+        selectionNotice = nil
+    }
+
     func revealCompletionLocation() {
         guard let url = completionLocationURL else { return }
-        if mode == .receive {
+        if transferContext?.mode == .receive {
             NSWorkspace.shared.open(url)
         } else {
             NSWorkspace.shared.activateFileViewerSelecting([url])
@@ -259,14 +323,20 @@ final class TransferStore: ObservableObject {
     }
 
     private func start(command: CrocCommand) {
+        // Check before resetting any state: a duplicate action must leave the live task intact.
+        guard !isBusy else { return }
+        transferContext = TransferContext(mode: mode, item: mode == .send ? selectedItem : nil,
+                                          outputDirectory: outputDirectory, relay: configuredRelay)
         guard let executableURL else {
-            phase = .failed(CrocRunnerError.executableNotFound.localizedDescription)
+            fail(CrocRunnerError.executableNotFound.localizedDescription, recovery: .settings)
             return
         }
 
         cancellationRequested = false
         promptFailureMessage = nil
         failureAllowsRetry = true
+        failureRecovery = .retry
+        selectionNotice = nil
         completedAt = nil
         transferDuration = nil
         transferStartedAt = Date()
@@ -291,7 +361,7 @@ final class TransferStore: ObservableObject {
                 completion: { [weak self] result in self?.finish(result) }
             )
         } catch {
-            phase = .failed(error.localizedDescription)
+            fail(error.localizedDescription, recovery: .settings)
             logLines.append("error: \(error.localizedDescription)")
             stopActivityMonitoring()
             stopPowerActivity()
@@ -299,6 +369,7 @@ final class TransferStore: ObservableObject {
     }
 
     private func handle(_ frame: CrocOutputFrame) {
+        guard phase.isRunning else { return }
         let line = CrocOutputParser.sanitized(frame.text)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !line.isEmpty else { return }
@@ -308,6 +379,10 @@ final class TransferStore: ObservableObject {
         if frame.terminator == .prompt {
             progressLogIndex = nil
             logLines.append(line)
+            guard !cancellationRequested else {
+                runner.respondToPrompt("n")
+                return
+            }
             if line.hasPrefix("Resume ") {
                 logLines.append("Resuming the existing partial file.")
                 runner.respondToPrompt("y")
@@ -350,11 +425,14 @@ final class TransferStore: ObservableObject {
     }
 
     private func finish(_ result: Result<Void, Error>) {
-        switch result {
-        case .success:
-            if let promptFailureMessage {
-                phase = .failed(promptFailureMessage)
-            } else {
+        recordCompletion()
+        if cancellationRequested {
+            phase = .cancelled
+        } else if let promptFailureMessage {
+            fail(promptFailureMessage, recovery: .chooseDestination)
+        } else {
+            switch result {
+            case .success:
                 progress = 1
                 if let snapshot = progressSnapshot {
                     progressSnapshot = CrocTransferProgress(
@@ -364,19 +442,17 @@ final class TransferStore: ObservableObject {
                         remainingTime: nil
                     )
                 }
-                recordCompletion()
                 phase = .completed
-            }
-        case let .failure(error):
-            if cancellationRequested {
-                recordCompletion()
-                phase = .cancelled
-            } else {
-                recordCompletion()
-                phase = .failed(CrocFailureExplainer.message(
+            case let .failure(error):
+                let failure = CrocFailureExplainer.explain(
                     logLines: logLines,
                     fallback: error.localizedDescription
-                ))
+                )
+                if failure.recovery == .chooseDestination, transferContext?.mode == .send {
+                    fail("croc encountered a read-only location while sending. Check Details for the affected path and its permissions, then try again.", recovery: .retry)
+                } else {
+                    fail(failure.message, recovery: failure.recovery)
+                }
                 logLines.append("error: \(error.localizedDescription)")
             }
         }
@@ -468,11 +544,14 @@ final class TransferStore: ObservableObject {
     }
 
     private func activityDetail(base: String) -> String {
-        guard let secondsSinceLastActivity, secondsSinceLastActivity >= 30 else { return base }
-        let elapsed = secondsSinceLastActivity < 120
-            ? "\(secondsSinceLastActivity)s"
-            : "\(secondsSinceLastActivity / 60)m"
-        return "\(base) · No new data for \(elapsed); croc is still running"
+        guard let inactivityNotice else { return base }
+        return "\(base) · \(inactivityNotice)"
+    }
+
+    private func fail(_ message: String, recovery: CrocRecoveryAction) {
+        failureRecovery = recovery
+        failureAllowsRetry = recovery == .retry
+        phase = .failed(message)
     }
 
     private func copyToPasteboard(_ value: String, notice: String) {

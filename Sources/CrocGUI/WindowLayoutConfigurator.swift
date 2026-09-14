@@ -3,7 +3,7 @@ import SwiftUI
 
 struct WindowLayoutConfigurator: NSViewRepresentable {
     let preventsClosing: Bool
-    private let migrationKey = "didApplyCompactWindowLayoutV2"
+    private let migrationKey = "didApplyCompactWindowLayoutV3"
 
     func makeNSView(context: Context) -> NSView {
         let view = NSView()
@@ -13,7 +13,7 @@ struct WindowLayoutConfigurator: NSViewRepresentable {
             guard !UserDefaults.standard.bool(forKey: migrationKey) else { return }
 
             let topLeft = NSPoint(x: window.frame.minX, y: window.frame.maxY)
-            window.setContentSize(NSSize(width: 900, height: 620))
+            window.setContentSize(NSSize(width: 520, height: 440))
             window.setFrameTopLeftPoint(topLeft)
             UserDefaults.standard.set(true, forKey: migrationKey)
         }

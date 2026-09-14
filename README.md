@@ -18,6 +18,10 @@ An independent native SwiftUI GUI for [croc](https://github.com/schollz/croc). T
 - Confirm process exit before reporting cancellation, with a forced-stop fallback for an unresponsive core
 - Show the active croc core version plus completion time, duration, destination, and a Finder shortcut
 - Explain common secure-channel, relay, and destination failures while preserving the full core log
+- Compact task workspace: select, share the code, track progress, then act on the result
+- Keep the active file, destination, and relay fixed for each attempt; ignore duplicate start actions
+- Include the active custom relay in copied terminal instructions (Windows PowerShell or macOS/Linux shell)
+- Reject multi-item drops explicitly; place several files in a folder to send them together
 
 The Swift app is a process wrapper; it does not reimplement or fork the croc protocol. Receive secrets are passed with `CROC_SECRET` and are deliberately omitted from the visible command log. The GUI owns the explicit copy action, so the wrapped sender disables croc's automatic clipboard write. Packaged builds pin and checksum the official croc v10.7.0 macOS ARM64 binary, retaining the v10 protocol line for compatibility with existing receivers.
 
@@ -66,13 +70,15 @@ Override the bundled CLI when needed:
 CROC_CORE=/absolute/path/to/croc ./scripts/package-app.sh
 ```
 
+Set `CROC_PACKAGE_OUTPUT_DIR` to a separate directory to preserve an existing package while creating a trial build. Local trial packages are ad-hoc signed, not notarized releases.
+
 ## Download and install
 
 Download the latest signed and notarized build from [GitHub Releases](https://github.com/xiaomao361/croc-gui/releases/latest). The current release supports Apple Silicon Macs running macOS 14 or newer.
 
 Open the DMG and drag `croc.app` to Applications. The ZIP contains the same notarized application for users who prefer a direct archive.
 
-Release `v0.2.0` is signed with Developer ID team `A5L4GGX82X`, accepted by Apple's notarization service, and validated by Gatekeeper as `Notarized Developer ID`.
+Release `v0.3.0` is signed with Developer ID team `A5L4GGX82X`, accepted by Apple's notarization service, and validated by Gatekeeper as `Notarized Developer ID`. See the [release notes](RELEASE_NOTES_V0.3.0.md).
 
 ## Create a signed release
 
@@ -93,5 +99,7 @@ Override `SIGN_IDENTITY`, `NOTARY_PROFILE`, or `CROC_CORE` in the environment wh
 ## Design
 
 The visual direction is maintained in [Figma](https://www.figma.com/design/iVCqXqYwcmOCMzN5FdEx8D). The app uses the macOS system font and native controls; Figma's Inter labels and drawn window chrome are presentation proxies only.
+
+The compact redesign combines study B's centered code/progress with study A's density. Terminal commands and their copy buttons are directly visible while waiting, Details has one entry point, and errors retain input with a relevant recovery action. See [implementation and validation notes](docs/compact-ui.md).
 
 The current public package is Apple Silicon only. A universal build remains future work because both the Swift executable and bundled croc core must include Intel slices.

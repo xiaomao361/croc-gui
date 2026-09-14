@@ -50,12 +50,12 @@ struct TransferDetailsView: View {
             .background(Color(nsColor: .textBackgroundColor))
             .clipShape(.rect(cornerRadius: 8))
 
-            Text("Secrets are passed through the environment and are not printed in this log.")
+            Text("The received code is omitted from command arguments. Core output may include the sender's code; review before sharing.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
         .padding(22)
-        .frame(minWidth: 680, minHeight: 440)
+        .frame(minWidth: 520, minHeight: 400)
     }
 }
 
@@ -90,7 +90,7 @@ struct SettingsView: View {
                     if store.useCustomRelay {
                         LabeledContent("Relay address") {
                             TextField("relay.example.com:9009", text: $store.relay)
-                                .frame(minWidth: 280)
+                                .frame(minWidth: 180)
                         }
 
                         if store.configuredRelay.isEmpty {
@@ -187,7 +187,7 @@ struct SettingsView: View {
             .formStyle(.grouped)
         }
         .padding(22)
-        .frame(minWidth: 680, minHeight: 470)
+        .frame(width: 520, height: 520)
     }
 
     private func settingsValueRow<Content: View>(

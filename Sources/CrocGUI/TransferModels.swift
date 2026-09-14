@@ -73,6 +73,26 @@ struct CrocCommand: Equatable {
     let environment: [String: String]
 }
 
+/// Facts owned by one attempt, independent of settings for the next transfer.
+struct TransferContext: Equatable {
+    let mode: TransferMode
+    let item: SelectedTransferItem?
+    let outputDirectory: URL
+    let relay: String
+}
+
+enum CrocRecoveryAction: Equatable {
+    case retry
+    case chooseDestination
+    case settings
+    case editCode
+}
+
+struct CrocFailure: Equatable {
+    let message: String
+    let recovery: CrocRecoveryAction
+}
+
 struct CrocTransferProgress: Equatable, Sendable {
     let fraction: Double
     let byteSummary: String?
@@ -119,24 +139,28 @@ struct CrocCoreInfo: Equatable, Sendable {
 
 enum CrocFailureExplainer {
     static func message(logLines: [String], fallback: String) -> String {
+        explain(logLines: logLines, fallback: fallback).message
+    }
+
+    static func explain(logLines: [String], fallback: String) -> CrocFailure {
         let recentOutput = logLines.suffix(24).joined(separator: "\n").lowercased()
 
         if recentOutput.contains("secure channel") &&
             (recentOutput.contains("not ready") || recentOutput.contains("peer disconnected")) {
-            return "The secure channel could not be established. Confirm the other computer is still waiting and uses a compatible croc version, then try again."
+            return CrocFailure(message: "The secure channel could not be established. Confirm the other computer is still waiting and uses a compatible croc version, then try again.", recovery: .retry)
         }
 
         if recentOutput.contains("connection refused") ||
             recentOutput.contains("could not connect") ||
             recentOutput.contains("unable to connect") {
-            return "The relay could not be reached. Check the network and relay settings, then try again."
+            return CrocFailure(message: "The relay could not be reached. Check the network and relay settings, then try again.", recovery: .settings)
         }
 
         if recentOutput.contains("read-only file system") {
-            return "croc could not write to the selected location. Choose a writable folder, then try again."
+            return CrocFailure(message: "croc could not write to the selected location. Choose a writable folder, then try again.", recovery: .chooseDestination)
         }
 
-        return fallback
+        return CrocFailure(message: fallback, recovery: .retry)
     }
 }
 
@@ -176,6 +200,27 @@ enum CrocCommandBuilder {
         var arguments = relayArguments(relay)
         arguments += ["--ignore-stdin", "--yes", "--out", output.path]
         return CrocCommand(arguments: arguments, environment: ["CROC_SECRET": code])
+    }
+
+    static func unixReceiveInstruction(code: String, relay: String) -> String {
+        "CROC_SECRET=\(shellQuote(code)) croc\(instructionRelay(relay, quote: shellQuote))"
+    }
+
+    /// This instruction targets PowerShell; single quotes suppress interpolation.
+    static func windowsReceiveInstruction(code: String, relay: String) -> String {
+        "croc\(instructionRelay(relay, quote: powerShellQuote)) \(powerShellQuote(code))"
+    }
+
+    private static func instructionRelay(_ relay: String, quote: (String) -> String) -> String {
+        relay.isEmpty ? "" : " --relay \(quote(relay))"
+    }
+
+    private static func shellQuote(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
+    }
+
+    private static func powerShellQuote(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "''") + "'"
     }
 
     private static func relayArguments(_ relay: String) -> [String] {

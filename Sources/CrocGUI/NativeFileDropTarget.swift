@@ -4,7 +4,7 @@ import SwiftUI
 struct NativeFileDropTarget: NSViewRepresentable {
     let isEnabled: Bool
     @Binding var isTargeted: Bool
-    let onDrop: (URL) -> Void
+    let onDrop: ([URL]) -> Bool
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -33,8 +33,8 @@ struct NativeFileDropTarget: NSViewRepresentable {
             parent.isTargeted = targeted
         }
 
-        func accept(_ url: URL) {
-            parent.onDrop(url)
+        func accept(_ urls: [URL]) -> Bool {
+            parent.onDrop(urls)
         }
     }
 
@@ -75,10 +75,8 @@ struct NativeFileDropTarget: NSViewRepresentable {
 
         override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
             coordinator?.setTargeted(false)
-            guard isDropEnabled,
-                  let first = Self.fileURLs(from: sender.draggingPasteboard).first else { return false }
-            coordinator?.accept(first)
-            return true
+            guard isDropEnabled else { return false }
+            return coordinator?.accept(Self.fileURLs(from: sender.draggingPasteboard)) ?? false
         }
 
         static func fileURLs(from pasteboard: NSPasteboard) -> [URL] {
@@ -97,9 +95,7 @@ struct NativeFileDropTarget: NSViewRepresentable {
                     url = nil
                 }
 
-                guard let url,
-                      url.isFileURL,
-                      FileManager.default.fileExists(atPath: url.path) else { return nil }
+                guard let url, url.isFileURL else { return nil }
                 return url.standardizedFileURL
             }
         }
