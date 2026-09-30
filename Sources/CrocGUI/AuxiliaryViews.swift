@@ -12,7 +12,7 @@ struct TransferDetailsView: View {
                 Spacer()
                 Button("Done") { dismiss() }
                     .buttonStyle(CrocButtonStyle(kind: .primary))
-                    .keyboardShortcut(.defaultAction)
+                    .keyboardShortcut(.cancelAction)
             }
 
             HStack {
@@ -62,6 +62,7 @@ struct TransferDetailsView: View {
 struct SettingsView: View {
     @ObservedObject var store: TransferStore
     @Environment(\.dismiss) private var dismiss
+    @FocusState private var relayAddressFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -76,21 +77,34 @@ struct SettingsView: View {
                 Spacer()
                 Button("Done") { dismiss() }
                     .buttonStyle(CrocButtonStyle(kind: .primary))
-                    .keyboardShortcut(.defaultAction)
+                    .keyboardShortcut(.cancelAction)
             }
 
             Form {
                 Section("Relay") {
-                    Picker("Connection", selection: $store.useCustomRelay) {
-                        Text("Use croc default relay").tag(false)
-                        Text("Use a custom relay").tag(true)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Connection")
+                        Picker("Connection", selection: $store.useCustomRelay) {
+                            Text("Use croc default relay").tag(false)
+                            Text("Use a custom relay").tag(true)
+                        }
+                        .pickerStyle(.radioGroup)
+                        .labelsHidden()
                     }
-                    .pickerStyle(.radioGroup)
 
                     if store.useCustomRelay {
-                        LabeledContent("Relay address") {
-                            TextField("relay.example.com:9009", text: $store.relay)
-                                .frame(minWidth: 180)
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Relay address")
+                            TextField("Relay address", text: $store.relay,
+                                      prompt: Text("relay.example.com:9009"))
+                                .labelsHidden()
+                                .textFieldStyle(.roundedBorder)
+                                .frame(maxWidth: .infinity)
+                                .accessibilityLabel("Relay address")
+                                .focused($relayAddressFocused)
+                            Text("Use the same relay address on both computers.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
 
                         if store.configuredRelay.isEmpty {
@@ -161,26 +175,9 @@ struct SettingsView: View {
                         .font(.callout)
                         .fixedSize(horizontal: false, vertical: true)
 
-                    HStack(spacing: 12) {
-                        Link(destination: URL(string: "https://github.com/schollz/croc")!) {
-                            Label("croc GitHub", systemImage: "link")
-                                .lineLimit(1)
-                        }
-                        .buttonStyle(CrocButtonStyle(kind: .secondary))
-
-                        Link(destination: URL(string: "https://getcroc.com/")!) {
-                            Label("croc website", systemImage: "globe")
-                                .lineLimit(1)
-                        }
-                        .buttonStyle(CrocButtonStyle(kind: .secondary))
-
-                        Link(destination: URL(string: "https://github.com/schollz/croc/blob/main/LICENSE")!) {
-                            Label("MIT license", systemImage: "doc.text")
-                                .lineLimit(1)
-                        }
-                        .buttonStyle(CrocButtonStyle(kind: .secondary))
-
-                        Spacer(minLength: 0)
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 12) { projectLinks }
+                        VStack(alignment: .leading, spacing: 10) { projectLinks }
                     }
                 }
             }
@@ -188,6 +185,25 @@ struct SettingsView: View {
         }
         .padding(22)
         .frame(width: 520, height: 520)
+        .onChange(of: store.useCustomRelay) { _, useCustomRelay in
+            relayAddressFocused = useCustomRelay
+        }
+    }
+
+    private var projectLinks: some View {
+        Group {
+            Link(destination: URL(string: "https://github.com/schollz/croc")!) {
+                Label("croc GitHub", systemImage: "link")
+            }
+            Link(destination: URL(string: "https://getcroc.com/")!) {
+                Label("croc website", systemImage: "globe")
+            }
+            Link(destination: URL(string: "https://github.com/schollz/croc/blob/main/LICENSE")!) {
+                Label("MIT license", systemImage: "doc.text")
+            }
+        }
+        .buttonStyle(CrocButtonStyle(kind: .secondary))
+        .fixedSize()
     }
 
     private func settingsValueRow<Content: View>(

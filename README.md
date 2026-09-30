@@ -72,13 +72,16 @@ CROC_CORE=/absolute/path/to/croc ./scripts/package-app.sh
 
 Set `CROC_PACKAGE_OUTPUT_DIR` to a separate directory to preserve an existing package while creating a trial build. Local trial packages are ad-hoc signed, not notarized releases.
 
+The current source revision is 0.3.1 (build 10), with settings usability fixes.
+See the [0.3.1 notes](RELEASE_NOTES_V0.3.1.md) for changes and validation boundaries.
+
 ## Download and install
 
 Download the latest signed and notarized build from [GitHub Releases](https://github.com/xiaomao361/croc-gui/releases/latest). The current release supports Apple Silicon Macs running macOS 14 or newer.
 
 Open the DMG and drag `croc.app` to Applications. The ZIP contains the same notarized application for users who prefer a direct archive.
 
-Release `v0.3.0` is signed with Developer ID team `A5L4GGX82X`, accepted by Apple's notarization service, and validated by Gatekeeper as `Notarized Developer ID`. See the [release notes](RELEASE_NOTES_V0.3.0.md).
+Release `v0.3.1` is signed with Developer ID team `A5L4GGX82X`, accepted by Apple's notarization service, and validated by Gatekeeper as `Notarized Developer ID`. See the [release notes](RELEASE_NOTES_V0.3.1.md).
 
 ## Create a signed release
 
