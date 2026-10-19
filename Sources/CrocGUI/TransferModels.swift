@@ -145,6 +145,14 @@ enum CrocFailureExplainer {
     static func explain(logLines: [String], fallback: String) -> CrocFailure {
         let recentOutput = logLines.suffix(24).joined(separator: "\n").lowercased()
 
+        let hasCodeError = logLines.suffix(24).contains { line in
+            let message = line.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            return message.hasPrefix("code is too short") || message.hasPrefix("invalid code phrase")
+        }
+        if hasCodeError {
+            return CrocFailure(message: "Check the complete code phrase with the sender, then enter it again.", recovery: .editCode)
+        }
+
         if recentOutput.contains("secure channel") &&
             (recentOutput.contains("not ready") || recentOutput.contains("peer disconnected")) {
             return CrocFailure(message: "The secure channel could not be established. Confirm the other computer is still waiting and uses a compatible croc version, then try again.", recovery: .retry)
@@ -161,31 +169,6 @@ enum CrocFailureExplainer {
         }
 
         return CrocFailure(message: fallback, recovery: .retry)
-    }
-}
-
-enum CrocCoreInspector {
-    static func inspect(executable: URL, source: String) -> CrocCoreInfo {
-        let process = Process()
-        let pipe = Pipe()
-        process.executableURL = executable
-        process.arguments = ["--version"]
-        process.standardOutput = pipe
-        process.standardError = pipe
-
-        do {
-            try process.run()
-            process.waitUntilExit()
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            let output = String(decoding: data, as: UTF8.self)
-            guard process.terminationStatus == 0,
-                  let version = CrocOutputParser.coreVersion(in: output) else {
-                return CrocCoreInfo(state: .unavailable, version: nil, source: source, path: executable.path)
-            }
-            return CrocCoreInfo(state: .available, version: version, source: source, path: executable.path)
-        } catch {
-            return CrocCoreInfo(state: .unavailable, version: nil, source: source, path: executable.path)
-        }
     }
 }
 
@@ -239,7 +222,7 @@ enum CrocOutputParser {
     }
 
     static func codePhrase(in line: String) -> String? {
-        firstCapture(in: sanitized(line), pattern: #"Code is:\s*(\S+)"#)
+        firstCapture(in: sanitized(line), pattern: #"^Code is:\s*(\S+)\s*$"#)
     }
 
     static func progress(in line: String) -> Double? {
@@ -248,13 +231,14 @@ enum CrocOutputParser {
 
     static func progressSnapshot(in line: String) -> CrocTransferProgress? {
         let clean = sanitized(line)
-        guard let raw = firstCapture(in: clean, pattern: #"\b(\d{1,3})%"#),
-              let percent = Double(raw) else { return nil }
+        guard let progressText = firstCapture(in: clean, pattern: #"(?:^|\s)(\d{1,3}%\s*(?:\|.*)?)$"#),
+              let raw = firstCapture(in: progressText, pattern: #"^(\d{1,3})%"#),
+              let percent = Double(raw), percent <= 100 else { return nil }
 
-        let metrics = firstCapture(in: clean, pattern: #"\b\d{1,3}%.*?\(([^()]*)\)"#)?
+        let metrics = firstCapture(in: progressText, pattern: #"\b\d{1,3}%.*?\(([^()]*)\)"#)?
             .split(separator: ",", maxSplits: 1)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-        let timing = firstCapture(in: clean, pattern: #"\b\d{1,3}%.*?\[([^\]]+)\]"#)
+        let timing = firstCapture(in: progressText, pattern: #"\b\d{1,3}%.*?\[([^\]]+)\]"#)
         let remaining = timing.flatMap { value -> String? in
             let parts = value.split(separator: ":", omittingEmptySubsequences: false)
             guard parts.count > 1 else { return nil }
@@ -273,7 +257,38 @@ enum CrocOutputParser {
     }
 
     static func coreVersion(in output: String) -> String? {
-        firstCapture(in: output, pattern: #"\b(?:version\s+)?v?(\d+\.\d+\.\d+(?:[-+][^\s]+)?)\b"#)
+        firstCapture(in: output, pattern: #"(?m)^croc version\s+v?(\d+\.\d+\.\d+(?:[-+][^\s]+)?)\s*$"#)
+    }
+
+    static func receivedItemSummary(in line: String) -> String? {
+        firstCapture(in: sanitized(line), pattern: #"^Receiving ((?:\d+ files|'.+') \(\d+(?:\.\d+)? (?:B|[kMGTPE]B)\))\s*$"#)
+    }
+
+    static func currentFileName(in line: String) -> String? {
+        guard let snapshot = progressSnapshot(in: line),
+              activityPhase(in: line, snapshot: snapshot) == .transferring else { return nil }
+        return firstCapture(in: sanitized(line), pattern: #"^(.*?)\s+\d{1,3}%\s*(?:\|.*)?$"#)?
+            .trimmingCharacters(in: .whitespaces)
+    }
+
+    static func activityPhase(in line: String, snapshot: CrocTransferProgress?) -> TransferPhase? {
+        let clean = sanitized(line).trimmingCharacters(in: .whitespaces)
+        if let snapshot {
+            // The pinned core shows count/total for file transfer bars. Preparation
+            // bars show only speed, even though their descriptions contain filenames.
+            if snapshot.byteSummary == nil &&
+                (clean.hasPrefix("Hashing ") || clean.hasPrefix("Checking ")) {
+                return .preparing
+            }
+            return .transferring
+        }
+        if firstCapture(in: clean, pattern: #"^(?:\S\s+)?(Sampling .+)$"#) != nil {
+            return .preparing
+        }
+        if clean.hasPrefix("Sending ") || clean.hasPrefix("Receiving ") {
+            return .transferring
+        }
+        return nil
     }
 
     private static func firstCapture(in value: String, pattern: String) -> String? {

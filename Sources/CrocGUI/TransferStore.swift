@@ -18,6 +18,8 @@ final class TransferStore: ObservableObject {
     @Published private(set) var failureAllowsRetry = true
     @Published private(set) var failureRecovery: CrocRecoveryAction = .retry
     @Published private(set) var transferContext: TransferContext?
+    @Published private(set) var receivedItemSummary: String?
+    @Published private(set) var currentFileName: String?
     @Published var selectionNotice: String?
     @Published var logLines: [String] = []
     @Published var showDetails = false
@@ -88,13 +90,29 @@ final class TransferStore: ObservableObject {
 
     var isBusy: Bool { phase.isRunning || runner.isRunning }
 
+    var isCoreReady: Bool {
+        guard let executableURL else { return false }
+        return coreInfo.state == .available && coreInfo.path == executableURL.path
+    }
+
+    var coreReadinessMessage: String? {
+        guard executableURL != nil else { return "Choose an available croc executable in Settings." }
+        if coreInfo.state == .checking { return "Checking the croc core before starting…" }
+        guard isCoreReady else {
+            return "The selected core could not be verified. Choose a working croc executable or check it again in Settings."
+        }
+        return nil
+    }
+
+    var isFileProgress: Bool { phase == .transferring && progressSnapshot != nil }
+
     var canBeginSend: Bool {
-        !isBusy && selectedItem != nil && executableURL != nil && isRelayConfigurationValid
+        !isBusy && selectedItem != nil && isCoreReady && isRelayConfigurationValid
     }
 
     var canBeginReceive: Bool {
         !isBusy && !receiveCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-        executableURL != nil && isRelayConfigurationValid
+        isCoreReady && isRelayConfigurationValid
     }
 
     var displayedItem: SelectedTransferItem? { transferContext?.item ?? selectedItem }
@@ -130,7 +148,7 @@ final class TransferStore: ObservableObject {
     var statusTitle: String {
         switch phase {
         case .idle: selectedItem == nil && mode == .send ? "Ready" : "Ready to transfer"
-        case .preparing: progressSnapshot == nil ? "Starting croc" : "Preparing file"
+        case .preparing: "Preparing transfer"
         case .waiting: "Waiting for the receiver"
         case .transferring: (transferContext?.mode ?? mode) == .send ? "Sending securely" : "Receiving securely"
         case .cancelling: "Cancelling transfer"
@@ -146,7 +164,7 @@ final class TransferStore: ObservableObject {
         case .preparing: activityDetail(base: progressSnapshot?.detailLabel ?? "Preparing the encrypted handoff")
         case .waiting: activityDetail(base: "Share the code phrase with the receiver")
         case .transferring:
-            activityDetail(base: progressSnapshot?.detailLabel ?? "Transfer in progress")
+            activityDetail(base: progressSnapshot.map { "Current file · \($0.detailLabel)" } ?? "Transfer in progress")
         case .cancelling: "Waiting for croc to stop safely"
         case .completed: completionSummary
         case .cancelled: "Nothing else will be sent or received"
@@ -180,6 +198,8 @@ final class TransferStore: ObservableObject {
         phase = .idle
         progress = nil
         progressSnapshot = nil
+        receivedItemSummary = nil
+        currentFileName = nil
         clipboardNotice = nil
     }
 
@@ -203,6 +223,8 @@ final class TransferStore: ObservableObject {
         phase = .idle
         progress = nil
         progressSnapshot = nil
+        receivedItemSummary = nil
+        currentFileName = nil
         clipboardNotice = nil
     }
 
@@ -215,6 +237,8 @@ final class TransferStore: ObservableObject {
         codePhrase = ""
         progress = nil
         progressSnapshot = nil
+        receivedItemSummary = nil
+        currentFileName = nil
         clipboardNotice = nil
     }
 
@@ -262,6 +286,8 @@ final class TransferStore: ObservableObject {
         codePhrase = ""
         clipboardNotice = nil
         phase = .cancelling
+        progress = nil
+        progressSnapshot = nil
         logLines.append("Cancelling transfer…")
         runner.cancel()
     }
@@ -304,6 +330,8 @@ final class TransferStore: ObservableObject {
         transferContext = nil
         progress = nil
         progressSnapshot = nil
+        receivedItemSummary = nil
+        currentFileName = nil
         secondsSinceLastActivity = nil
         completedAt = nil
         transferDuration = nil
@@ -331,6 +359,10 @@ final class TransferStore: ObservableObject {
             fail(CrocRunnerError.executableNotFound.localizedDescription, recovery: .settings)
             return
         }
+        guard isCoreReady else {
+            fail(coreReadinessMessage ?? "Check the croc executable in Settings.", recovery: .settings)
+            return
+        }
 
         cancellationRequested = false
         promptFailureMessage = nil
@@ -343,6 +375,8 @@ final class TransferStore: ObservableObject {
         phase = .preparing
         progress = nil
         progressSnapshot = nil
+        receivedItemSummary = nil
+        currentFileName = nil
         progressLogIndex = nil
         clipboardNotice = nil
         codePhrase = mode == .send ? "" : codePhrase
@@ -410,17 +444,22 @@ final class TransferStore: ObservableObject {
             progressSnapshot = nil
             phase = .waiting
         }
+        if transferContext?.mode == .receive,
+           let summary = CrocOutputParser.receivedItemSummary(in: line) {
+            receivedItemSummary = summary
+        }
+        if let activityPhase = CrocOutputParser.activityPhase(in: line, snapshot: snapshot) {
+            if activityPhase != phase {
+                progress = nil
+                progressSnapshot = nil
+                currentFileName = nil
+            }
+            phase = activityPhase
+        }
         if let snapshot {
             progressSnapshot = snapshot
             progress = snapshot.fraction
-        }
-        if line.localizedCaseInsensitiveContains("hashing") ||
-            line.localizedCaseInsensitiveContains("sampling") ||
-            line.localizedCaseInsensitiveContains("checking") {
-            phase = .preparing
-        } else if line.localizedCaseInsensitiveContains("sending") ||
-                    line.localizedCaseInsensitiveContains("receiving") {
-            phase = .transferring
+            currentFileName = CrocOutputParser.currentFileName(in: line)
         }
     }
 
@@ -474,11 +513,13 @@ final class TransferStore: ObservableObject {
         let source = CrocExecutableLocator.source(for: executableURL, overridePath: executableOverride)
         coreInfo = CrocCoreInfo(state: .checking, version: nil, source: source, path: executableURL.path)
         coreInspectionTask = Task { [weak self] in
-            let result = await Task.detached(priority: .utility) {
-                CrocCoreInspector.inspect(executable: executableURL, source: source)
-            }.value
-            guard !Task.isCancelled, self?.executableURL == executableURL else { return }
-            self?.coreInfo = result
+            let result = await CrocCoreInspector.inspect(executable: executableURL, source: source)
+            guard !Task.isCancelled, let self else { return }
+            guard self.executableURL == executableURL else {
+                refreshCoreInfo()
+                return
+            }
+            coreInfo = result
         }
     }
 

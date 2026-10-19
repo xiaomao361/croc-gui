@@ -197,7 +197,14 @@ struct ContentView: View {
                     .font(.callout.weight(.medium))
                     .foregroundStyle(CrocPalette.olive)
 
-                if store.phase == .waiting && !store.codePhrase.isEmpty {
+                if store.phase == .cancelling {
+                    ProgressView().controlSize(.regular)
+                        .padding(.vertical, 20)
+                        .accessibilityLabel(store.statusTitle)
+                    Text("Waiting for croc to stop safely.")
+                        .font(.callout)
+                        .foregroundStyle(CrocPalette.olive)
+                } else if store.phase == .waiting && !store.codePhrase.isEmpty {
                     Text(store.codePhrase)
                         .font(.system(size: 29, weight: .medium))
                         .foregroundStyle(CrocPalette.ink)
@@ -207,6 +214,14 @@ struct ContentView: View {
                         .help(store.codePhrase)
                     CopyFeedbackButton("Copy code", kind: .primary, action: store.copyCode)
                 } else if let progress = store.progress {
+                    if store.isFileProgress {
+                        Text(store.currentFileName.map { "Current file: \($0)" } ?? "Current file progress")
+                            .font(.caption)
+                            .foregroundStyle(CrocPalette.olive)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .help(store.currentFileName ?? "Current file progress")
+                    }
                     Text(progress, format: .percent.precision(.fractionLength(0)))
                         .font(.system(size: 60, weight: .regular))
                         .monospacedDigit()
@@ -216,12 +231,12 @@ struct ContentView: View {
                     ProgressView(value: progress)
                         .progressViewStyle(.linear)
                         .frame(maxWidth: 320)
-                        .accessibilityLabel(store.statusTitle)
+                        .accessibilityLabel(store.isFileProgress ? "Current file progress" : store.statusTitle)
                     if progress >= 1 {
-                        Text("Finalizing — waiting for croc to finish.")
+                        Text(store.isFileProgress ? "Current file finished — waiting for croc." : "Waiting for croc to continue.")
                             .font(.callout).foregroundStyle(CrocPalette.olive)
                     } else if let remaining = store.progressSnapshot?.remainingTime, !remaining.isEmpty {
-                        Text("Estimated remaining: \(remaining)")
+                        Text(store.isFileProgress ? "Estimated remaining for this file: \(remaining)" : "Estimated remaining for this step: \(remaining)")
                             .font(.callout).foregroundStyle(CrocPalette.olive)
                     }
                     if let snapshot = store.progressSnapshot {
@@ -234,7 +249,7 @@ struct ContentView: View {
                     ProgressView().controlSize(.regular)
                         .padding(.vertical, 20)
                         .accessibilityLabel(store.statusTitle)
-                    Text(store.phase == .cancelling ? "Waiting for croc to stop safely." : "Connecting and preparing the transfer…")
+                    Text("Connecting and preparing the transfer…")
                         .font(.callout)
                         .foregroundStyle(CrocPalette.olive)
                 }
@@ -260,7 +275,11 @@ struct ContentView: View {
             fileIdentity(item)
         } else {
             VStack(spacing: 4) {
-                Text("Receiving files").font(.callout.weight(.medium))
+                Text(store.receivedItemSummary ?? "File details unavailable")
+                    .font(.callout.weight(.medium))
+                    .lineLimit(2)
+                    .truncationMode(.middle)
+                    .help(store.receivedItemSummary ?? "croc has not provided the file details.")
                 Text("To \(store.displayedOutputDirectory.abbreviatedDirectoryPath)")
                     .font(.caption).foregroundStyle(CrocPalette.olive)
                     .lineLimit(1).truncationMode(.middle)
@@ -353,6 +372,7 @@ struct ContentView: View {
         if store.phase == .completed {
             Button(store.transferContext?.mode == .receive ? "Open folder" : "Show in Finder", action: store.revealCompletionLocation)
                 .buttonStyle(CrocButtonStyle(kind: .primary))
+                .keyboardShortcut(.defaultAction)
             Button("New transfer", action: store.prepareNewTransfer)
                 .buttonStyle(CrocButtonStyle(kind: .secondary))
         } else {
@@ -361,21 +381,26 @@ struct ContentView: View {
                 case .chooseDestination:
                     Button("Change save folder…") { chooseOutputDirectory() }
                         .buttonStyle(CrocButtonStyle(kind: .primary))
+                        .keyboardShortcut(.defaultAction)
                 case .settings:
                     Button("Check settings…") { showsSettings = true }
                         .buttonStyle(CrocButtonStyle(kind: .primary))
+                        .keyboardShortcut(.defaultAction)
                     Button("Try again", action: retry)
                         .buttonStyle(CrocButtonStyle(kind: .secondary))
                 case .editCode:
                     Button("Edit code", action: store.editTransfer)
                         .buttonStyle(CrocButtonStyle(kind: .primary))
+                        .keyboardShortcut(.defaultAction)
                 case .retry:
                     Button("Try again", action: retry)
                         .buttonStyle(CrocButtonStyle(kind: .primary))
+                        .keyboardShortcut(.defaultAction)
                 }
             } else {
                 Button("Try again", action: retry)
                     .buttonStyle(CrocButtonStyle(kind: .primary))
+                    .keyboardShortcut(.defaultAction)
             }
             if store.failureRecovery != .editCode {
                 Button(store.mode == .receive ? "Edit details" : "Change selection", action: store.editTransfer)
@@ -417,16 +442,25 @@ struct ContentView: View {
     private var setupWarning: some View {
         if let message = setupBlockingMessage {
             VStack(spacing: 8) {
-                Text(message).font(.callout).foregroundStyle(CrocPalette.danger)
-                    .multilineTextAlignment(.center)
-                Button("Open settings…") { showsSettings = true }
-                    .buttonStyle(.borderless)
+                HStack(spacing: 8) {
+                    if store.coreInfo.state == .checking {
+                        ProgressView().controlSize(.small)
+                    }
+                    Text(message)
+                        .font(.callout)
+                        .foregroundStyle(store.coreInfo.state == .checking ? CrocPalette.olive : CrocPalette.danger)
+                        .multilineTextAlignment(.center)
+                }
+                if store.coreInfo.state != .checking {
+                    Button("Open settings…") { showsSettings = true }
+                        .buttonStyle(.borderless)
+                }
             }
         }
     }
 
     private var setupBlockingMessage: String? {
-        if store.executableURL == nil { return "Choose a croc executable to start." }
+        if !store.isCoreReady { return store.coreReadinessMessage }
         if !store.isRelayConfigurationValid { return "Enter a custom relay address in Settings." }
         return nil
     }

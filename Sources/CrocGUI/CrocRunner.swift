@@ -16,11 +16,18 @@ enum CrocRunnerError: LocalizedError {
 }
 
 enum CrocExecutableLocator {
-    static func locate(overridePath: String) -> URL? {
+    static func locate(
+        overridePath: String,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> URL? {
         let manager = FileManager.default
+        if !overridePath.isEmpty {
+            return manager.isExecutableFile(atPath: overridePath) ? URL(fileURLWithPath: overridePath) : nil
+        }
+        if let environmentPath = environment["CROC_EXECUTABLE"], !environmentPath.isEmpty {
+            return manager.isExecutableFile(atPath: environmentPath) ? URL(fileURLWithPath: environmentPath) : nil
+        }
         let candidates: [String?] = [
-            overridePath.isEmpty ? nil : overridePath,
-            ProcessInfo.processInfo.environment["CROC_EXECUTABLE"],
             Bundle.main.path(forResource: "croc", ofType: nil),
             "/opt/homebrew/bin/croc",
             "/usr/local/bin/croc"
@@ -30,7 +37,7 @@ enum CrocExecutableLocator {
             return URL(fileURLWithPath: path)
         }
 
-        for directory in (ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":") {
+        for directory in (environment["PATH"] ?? "").split(separator: ":") {
             let path = URL(fileURLWithPath: String(directory)).appendingPathComponent("croc").path
             if manager.isExecutableFile(atPath: path) {
                 return URL(fileURLWithPath: path)
@@ -39,12 +46,16 @@ enum CrocExecutableLocator {
         return nil
     }
 
-    static func source(for executable: URL, overridePath: String) -> String {
+    static func source(
+        for executable: URL,
+        overridePath: String,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> String {
         if !overridePath.isEmpty,
            URL(fileURLWithPath: overridePath).standardizedFileURL == executable.standardizedFileURL {
             return "Custom"
         }
-        if let environmentPath = ProcessInfo.processInfo.environment["CROC_EXECUTABLE"],
+        if let environmentPath = environment["CROC_EXECUTABLE"],
            URL(fileURLWithPath: environmentPath).standardizedFileURL == executable.standardizedFileURL {
             return "Environment"
         }
@@ -130,13 +141,22 @@ final class LineReader: @unchecked Sendable {
 
 @MainActor
 final class CrocRunner {
+    private enum Event: Sendable {
+        case output(CrocOutputFrame)
+        case endOfOutput
+        case outputFailed(String)
+        case exited(status: Int32, signalled: Bool)
+    }
+
+    private var attemptID: UUID?
     private var process: Process?
     private var outputHandle: FileHandle?
     private var inputHandle: FileHandle?
-    private var reader: LineReader?
+    private var eventTask: Task<Void, Never>?
     private var forceCancelTask: Task<Void, Never>?
 
-    var isRunning: Bool { process?.isRunning == true }
+    // An exited process still owns the attempt until its final output has been delivered.
+    var isRunning: Bool { attemptID != nil }
 
     func start(
         executable: URL,
@@ -156,57 +176,118 @@ final class CrocRunner {
         process.standardInput = inputPipe
         process.environment = ProcessInfo.processInfo.environment.merging(command.environment) { _, new in new }
 
+        let id = UUID()
+        let eventCapacity = 256
+        let pendingEvents = DispatchSemaphore(value: eventCapacity)
+        let (events, continuation) = AsyncStream.makeStream(of: Event.self,
+            bufferingPolicy: .bufferingOldest(eventCapacity))
+        let emit: @Sendable (Event) -> Void = { event in
+            // Apply backpressure on the background producers instead of dropping
+            // frames or accumulating an unbounded MainActor backlog.
+            pendingEvents.wait()
+            if case .terminated = continuation.yield(event) { pendingEvents.signal() }
+        }
         let reader = LineReader { frame in
-            Task { @MainActor in onOutput(frame) }
+            emit(.output(frame))
         }
         let handle = pipe.fileHandleForReading
-        handle.readabilityHandler = { handle in
-            let data = handle.availableData
-            if data.isEmpty {
-                reader.finish()
-                handle.readabilityHandler = nil
-            } else {
-                reader.consume(data)
-            }
+        process.terminationHandler = { process in
+            emit(.exited(status: process.terminationStatus,
+                         signalled: process.terminationReason != .exit))
         }
 
-        process.terminationHandler = { [weak self] process in
-            reader.finish()
-            Task { @MainActor in
-                self?.outputHandle?.readabilityHandler = nil
-                try? self?.inputHandle?.close()
-                self?.outputHandle = nil
-                self?.inputHandle = nil
-                self?.reader = nil
-                self?.process = nil
-                self?.forceCancelTask?.cancel()
-                self?.forceCancelTask = nil
-                if process.terminationStatus == 0 {
-                    completion(.success(()))
-                } else {
-                    let error = NSError(
-                        domain: "CrocRunner",
-                        code: Int(process.terminationStatus),
-                        userInfo: [NSLocalizedDescriptionKey: "croc exited with status \(process.terminationStatus)"]
-                    )
-                    completion(.failure(error))
-                }
-            }
-        }
-
+        attemptID = id
         self.process = process
         outputHandle = handle
         inputHandle = inputPipe.fileHandleForWriting
-        self.reader = reader
         do {
             try process.run()
         } catch {
-            handle.readabilityHandler = nil
+            process.terminationHandler = nil
+            continuation.finish()
+            try? handle.close()
+            try? inputPipe.fileHandleForWriting.close()
+            try? pipe.fileHandleForWriting.close()
+            try? inputPipe.fileHandleForReading.close()
+            attemptID = nil
             self.process = nil
             outputHandle = nil
             inputHandle = nil
-            self.reader = nil
             throw error
+        }
+
+        try? pipe.fileHandleForWriting.close()
+        try? inputPipe.fileHandleForReading.close()
+
+        // One reader owns the byte stream. One MainActor consumer delivers every
+        // frame in order, including the final unterminated line, before completion.
+        DispatchQueue.global(qos: .utility).async {
+            var buffer = [UInt8](repeating: 0, count: 64 * 1024)
+            while true {
+                // Unlike read(upToCount:), one POSIX read returns as soon as
+                // bytes are available. Prompts and progress must not wait for EOF.
+                let count = buffer.withUnsafeMutableBytes { bytes in
+                    Darwin.read(handle.fileDescriptor, bytes.baseAddress, bytes.count)
+                }
+                if count > 0 {
+                    reader.consume(Data(buffer.prefix(count)))
+                } else if count == 0 {
+                    break
+                } else if errno != EINTR {
+                    let error = NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+                    emit(.outputFailed(error.localizedDescription))
+                    break
+                }
+            }
+            reader.finish()
+            emit(.endOfOutput)
+        }
+
+        eventTask = Task { [weak self] in
+            defer { continuation.finish() }
+            var reachedEOF = false
+            var exit: (status: Int32, signalled: Bool)?
+            var outputError: String?
+            for await event in events {
+                pendingEvents.signal()
+                guard let self, attemptID == id else { break }
+                switch event {
+                case let .output(frame):
+                    onOutput(frame)
+                case .endOfOutput:
+                    reachedEOF = true
+                case let .outputFailed(message):
+                    outputError = message
+                    cancel()
+                case let .exited(status, signalled):
+                    exit = (status, signalled)
+                }
+                guard reachedEOF, let exit else { continue }
+                continuation.finish()
+                self.process?.terminationHandler = nil
+                try? outputHandle?.close()
+                try? inputHandle?.close()
+                outputHandle = nil
+                inputHandle = nil
+                self.process = nil
+                attemptID = nil
+                forceCancelTask?.cancel()
+                forceCancelTask = nil
+                eventTask = nil
+                if let outputError {
+                    completion(.failure(NSError(domain: "CrocRunner", code: -1,
+                        userInfo: [NSLocalizedDescriptionKey: "Could not read croc output: \(outputError)"])))
+                } else if exit.status == 0, !exit.signalled {
+                    completion(.success(()))
+                } else {
+                    let description = exit.signalled
+                        ? "croc stopped after signal \(exit.status)"
+                        : "croc exited with status \(exit.status)"
+                    completion(.failure(NSError(domain: "CrocRunner", code: Int(exit.status),
+                        userInfo: [NSLocalizedDescriptionKey: description])))
+                }
+                break
+            }
         }
     }
 
@@ -214,11 +295,13 @@ final class CrocRunner {
         guard let process, process.isRunning else { return }
         process.terminate()
         forceCancelTask?.cancel()
+        let id = attemptID
         let processID = process.processIdentifier
         forceCancelTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(5))
             guard !Task.isCancelled,
                   let current = self?.process,
+                  self?.attemptID == id,
                   current.processIdentifier == processID,
                   current.isRunning else { return }
             Darwin.kill(processID, SIGKILL)

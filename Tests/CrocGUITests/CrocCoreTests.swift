@@ -206,7 +206,7 @@ private final class FrameRecorder: @unchecked Sendable {
 
     #expect(store.phase == .cancelling)
     #expect(store.codePhrase.isEmpty)
-    #expect(store.progress == 0.3)
+    #expect(store.progress == nil)
     #expect(store.clipboardNotice == nil)
 }
 
@@ -239,4 +239,33 @@ private final class FrameRecorder: @unchecked Sendable {
 @Test func downloadDirectoryUsesHomeRelativeDisplayPath() {
     let downloads = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads")
     #expect(downloads.abbreviatedDirectoryPath == "~/Downloads/")
+}
+
+@Test func versionIdentityCannotBeBorrowedFromAnotherTool() {
+    #expect(CrocOutputParser.coreVersion(in: "other-tool version 10.7.0") == nil)
+    #expect(CrocOutputParser.coreVersion(in: "10.7.0") == nil)
+}
+
+@Test func receiveSummaryDoesNotGuessFromPeerOrContentCounter() {
+    #expect(CrocOutputParser.receivedItemSummary(in: "Receiving 'my archive.zip' (1.0 kB) ") == "'my archive.zip' (1.0 kB)")
+    #expect(CrocOutputParser.receivedItemSummary(in: "Receiving 12 files (3.5 MB)") == "12 files (3.5 MB)")
+    #expect(CrocOutputParser.receivedItemSummary(in: "Receiving (<-127.0.0.1)") == nil)
+    #expect(CrocOutputParser.receivedItemSummary(in: " 2/4") == nil)
+}
+
+@Test func progressDoesNotReadPercentageInsideFilename() {
+    #expect(CrocOutputParser.progress(in: "invoice 42% report.zip 10% |██| (1/10 MB, 2 MB/s)") == 0.1)
+    #expect(CrocOutputParser.progress(in: "invoice42%report.zip") == nil)
+    #expect(CrocOutputParser.progress(in: "archive.zip 101% |██|") == nil)
+}
+
+@Test func phaseParsingSeparatesPreparationFromFilenameWords() {
+    let file = "Hashing report.zip 42% |██| (1/2 MB, 2 MB/s)"
+    #expect(CrocOutputParser.activityPhase(in: file, snapshot: CrocOutputParser.progressSnapshot(in: file)) == .transferring)
+    let hashing = "Hashing report.zip 42% |██| (2 MB/s) [1s:2s]"
+    #expect(CrocOutputParser.activityPhase(in: hashing, snapshot: CrocOutputParser.progressSnapshot(in: hashing)) == .preparing)
+    #expect(CrocOutputParser.activityPhase(in: "Sending checking-results.zip", snapshot: nil) == .transferring)
+    #expect(CrocOutputParser.activityPhase(in: "⠹ Sampling archive.zip [0s]", snapshot: nil) == .preparing)
+    #expect(CrocOutputParser.activityPhase(in: "diagnostic for checking-results.zip", snapshot: nil) == nil)
+    #expect(CrocOutputParser.codePhrase(in: "file Code is: test-code.zip 42% |██|") == nil)
 }

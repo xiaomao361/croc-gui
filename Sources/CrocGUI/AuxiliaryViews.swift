@@ -32,23 +32,22 @@ struct TransferDetailsView: View {
                 }
             }
 
-            if let progress = store.progress, store.phase.isRunning {
+            if store.phase == .cancelling {
+                ProgressView()
+                    .controlSize(.small)
+                    .accessibilityLabel(store.statusTitle)
+            } else if let progress = store.progress, store.phase.isRunning {
                 ProgressView(value: progress)
                     .progressViewStyle(.linear)
-                    .tint(store.phase == .cancelling ? Color.secondary : CrocPalette.forestBright)
-                    .accessibilityLabel(store.statusTitle)
+                    .tint(CrocPalette.forestBright)
+                    .accessibilityLabel(store.isFileProgress ? "Current file progress" : store.statusTitle)
                     .accessibilityValue("\(Int(progress * 100)) percent")
             }
 
-            ScrollView {
-                Text(store.logLines.isEmpty ? "No transfer log yet." : store.logLines.joined(separator: "\n"))
-                    .font(.system(.caption, design: .monospaced))
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
-                    .padding(12)
-            }
-            .background(Color(nsColor: .textBackgroundColor))
-            .clipShape(.rect(cornerRadius: 8))
+            TransferLogView(lines: store.logLines)
+                .equatable()
+                .background(Color(nsColor: .textBackgroundColor))
+                .clipShape(.rect(cornerRadius: 8))
 
             Text("The received code is omitted from command arguments. Core output may include the sender's code; review before sharing.")
                 .font(.caption)
@@ -56,6 +55,86 @@ struct TransferDetailsView: View {
         }
         .padding(22)
         .frame(minWidth: 520, minHeight: 400)
+    }
+}
+
+private struct TransferLogView: View, Equatable {
+    let lines: [String]
+    @State private var followsLatestOutput = true
+    @State private var previousContentFrame: CGRect?
+    private let bottomID = "transfer-log-bottom"
+    private let coordinateSpace = "transfer-log-viewport"
+
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.lines == rhs.lines
+    }
+
+    var body: some View {
+        GeometryReader { viewport in
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        TransferLogText(lines: lines)
+                            .equatable()
+                        Color.clear.frame(height: 1).id(bottomID)
+                    }
+                    .background {
+                        GeometryReader { content in
+                            Color.clear.preference(
+                                key: LogContentFrameKey.self,
+                                value: content.frame(in: .named(coordinateSpace))
+                            )
+                        }
+                    }
+                }
+                .coordinateSpace(name: coordinateSpace)
+                .onPreferenceChange(LogContentFrameKey.self) { frame in
+                    guard frame.height > 0 else { return }
+                    let bottomIsVisible = frame.maxY <= viewport.size.height + 2
+                    let contentHeightChanged = previousContentFrame.map { abs(frame.height - $0.height) > 0.5 } ?? true
+                    let movedUp = previousContentFrame.map { frame.minY > $0.minY + 0.5 } ?? false
+
+                    if bottomIsVisible {
+                        followsLatestOutput = true
+                    } else if movedUp {
+                        // A scroll toward earlier output wins even when new output arrives.
+                        followsLatestOutput = false
+                    } else if followsLatestOutput && contentHeightChanged {
+                        proxy.scrollTo(bottomID, anchor: .bottom)
+                    }
+                    previousContentFrame = frame
+                }
+                .onChange(of: viewport.size.height) { _, _ in
+                    if followsLatestOutput { proxy.scrollTo(bottomID, anchor: .bottom) }
+                }
+                .onChange(of: lines.isEmpty) { _, isEmpty in
+                    if isEmpty {
+                        followsLatestOutput = true
+                        previousContentFrame = nil
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct TransferLogText: View, Equatable {
+    let lines: [String]
+
+    var body: some View {
+        Text(lines.isEmpty ? "No transfer log yet." : lines.joined(separator: "\n"))
+            .font(.system(.caption, design: .monospaced))
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .padding(12)
+    }
+}
+
+private struct LogContentFrameKey: PreferenceKey {
+    static let defaultValue = CGRect.zero
+
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        value = nextValue()
     }
 }
 
@@ -129,6 +208,18 @@ struct SettingsView: View {
                             .foregroundStyle(store.coreInfo.state == .unavailable ? CrocPalette.danger : .secondary)
                             .textSelection(.enabled)
                             .lineLimit(1)
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        if store.coreInfo.state != .checking, let message = store.coreReadinessMessage {
+                            Text(message)
+                                .font(.caption)
+                                .foregroundStyle(CrocPalette.danger)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Button("Check again", action: store.refreshCoreInfo)
+                            .buttonStyle(CrocButtonStyle(kind: .secondary))
+                            .disabled(store.coreInfo.state == .checking && store.coreInfo.path == store.executableURL?.path)
                     }
 
                     settingsValueRow(label: "App version") {

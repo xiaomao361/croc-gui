@@ -12,7 +12,7 @@ private struct TransferFixture {
     let suite: String
     let store: TransferStore
 
-    init(body: String = "sleep 0.2") throws {
+    init(body: String = "sleep 0.2") async throws {
         directory = FileManager.default.temporaryDirectory.appendingPathComponent("CrocLifecycle-\(UUID().uuidString)")
         source = directory.appendingPathComponent("sample.zip")
         output = directory.appendingPathComponent("inbox", isDirectory: true)
@@ -34,6 +34,7 @@ private struct TransferFixture {
         defaults.set(executable.path, forKey: "executableOverride")
         defaults.set(output.path, forKey: "outputDirectory")
         store = TransferStore(defaults: defaults)
+        try await eventually { store.isCoreReady }
     }
 
     func cleanup() {
@@ -53,7 +54,7 @@ private func eventually(_ condition: () -> Bool) async throws {
 }
 
 @Test @MainActor func repeatedReceiveKeepsOriginalTaskAndDestination() async throws {
-    let fixture = try TransferFixture()
+    let fixture = try await TransferFixture()
     defer { fixture.cleanup() }
     let store = fixture.store
     store.changeMode(to: .receive)
@@ -76,7 +77,7 @@ private func eventually(_ condition: () -> Bool) async throws {
 }
 
 @Test @MainActor func repeatedSendKeepsFileAndActiveRelayInstructions() async throws {
-    let fixture = try TransferFixture(body: "echo 'Code is: sample-test-code'\nsleep 0.3")
+    let fixture = try await TransferFixture(body: "echo 'Code is: sample-test-code'\nsleep 0.3")
     defer { fixture.cleanup() }
     let store = fixture.store
     store.select(fixture.source)
@@ -98,8 +99,8 @@ private func eventually(_ condition: () -> Bool) async throws {
     #expect(store.codePhrase.isEmpty)
 }
 
-@Test @MainActor func missingDestinationIsActionableAndCodeSurvivesEditing() throws {
-    let fixture = try TransferFixture()
+@Test @MainActor func missingDestinationIsActionableAndCodeSurvivesEditing() async throws {
+    let fixture = try await TransferFixture()
     defer { fixture.cleanup() }
     let store = fixture.store
     store.changeMode(to: .receive)
@@ -117,8 +118,8 @@ private func eventually(_ condition: () -> Bool) async throws {
     #expect(store.canBeginReceive)
 }
 
-@Test @MainActor func multipleDroppedFilesNeverSilentlySelectOnlyOne() throws {
-    let fixture = try TransferFixture()
+@Test @MainActor func multipleDroppedFilesNeverSilentlySelectOnlyOne() async throws {
+    let fixture = try await TransferFixture()
     defer { fixture.cleanup() }
     let store = fixture.store
     store.select(fixture.source)
@@ -136,8 +137,8 @@ private func eventually(_ condition: () -> Bool) async throws {
     #expect(store.selectionNotice == nil)
 }
 
-@Test @MainActor func unavailableDropKeepsPreviousSelectionAndReportsFailure() throws {
-    let fixture = try TransferFixture()
+@Test @MainActor func unavailableDropKeepsPreviousSelectionAndReportsFailure() async throws {
+    let fixture = try await TransferFixture()
     defer { fixture.cleanup() }
     fixture.store.select(fixture.source)
     #expect(!fixture.store.acceptDrop([fixture.directory.appendingPathComponent("missing")]))
@@ -146,7 +147,7 @@ private func eventually(_ condition: () -> Bool) async throws {
 }
 
 @Test @MainActor func refusedRelayStaysFailedWithSettingsRecovery() async throws {
-    let fixture = try TransferFixture(body: "echo 'connection refused'\nsleep 0.05\nexit 1")
+    let fixture = try await TransferFixture(body: "echo 'connection refused'\nsleep 0.05\nexit 1")
     defer { fixture.cleanup() }
     let store = fixture.store
     store.select(fixture.source)
@@ -159,7 +160,7 @@ private func eventually(_ condition: () -> Bool) async throws {
 }
 
 @Test(arguments: [0, 1]) @MainActor func overwriteRefusalNeverBecomesSuccess(exitStatus: Int) async throws {
-    let fixture = try TransferFixture(body: """
+    let fixture = try await TransferFixture(body: """
     printf '%s' "Overwrite '/tmp/example.txt'? (y/N) (use --overwrite to omit) "
     IFS= read -r answer
     [ "$answer" = n ] || exit 99
@@ -180,7 +181,7 @@ private func eventually(_ condition: () -> Bool) async throws {
 }
 
 @Test @MainActor func cancellationRemainsCancelledWhenCoreExitsZero() async throws {
-    let fixture = try TransferFixture(body: """
+    let fixture = try await TransferFixture(body: """
     trap 'exit 0' TERM
     echo 'Code is: sample-test-code'
     while :; do sleep 0.05; done
@@ -219,7 +220,7 @@ private func eventually(_ condition: () -> Bool) async throws {
 }
 
 @Test @MainActor func fullProgressStillWaitsForCoreExit() async throws {
-    let fixture = try TransferFixture(body: "echo 'Sending sample.zip'\necho 'sample.zip 100% |████| (2.0/2.0 MB, 10 MB/s)'\nsleep 0.3\nexit 1")
+    let fixture = try await TransferFixture(body: "echo 'Sending sample.zip'\necho 'sample.zip 100% |████| (2.0/2.0 MB, 10 MB/s)'\nsleep 0.3\nexit 1")
     defer { fixture.cleanup() }
     let store = fixture.store
     store.select(fixture.source)
@@ -232,11 +233,120 @@ private func eventually(_ condition: () -> Bool) async throws {
 }
 
 @Test @MainActor func sendWriteFailureDoesNotOfferReceiveFolderRecovery() async throws {
-    let fixture = try TransferFixture(body: "echo 'read-only file system'\nsleep 0.05\nexit 1")
+    let fixture = try await TransferFixture(body: "echo 'read-only file system'\nsleep 0.05\nexit 1")
     defer { fixture.cleanup() }
     fixture.store.select(fixture.source)
     fixture.store.beginSend()
     try await eventually { fixture.store.phase.isTerminal }
     #expect(fixture.store.failureRecovery == .retry)
     #expect(fixture.store.statusDetail.contains("while sending"))
+}
+
+@Test @MainActor func unverifiedExecutableCannotProduceTransferSuccess() async throws {
+    let fixture = try await TransferFixture()
+    defer { fixture.cleanup() }
+    let store = fixture.store
+    store.select(fixture.source)
+    store.executableOverride = "/usr/bin/true"
+    #expect(!store.canBeginSend)
+    try await eventually { store.coreInfo.state == .unavailable }
+    store.beginSend()
+    #expect(store.phase != .completed)
+    #expect(!store.isBusy)
+    #expect(store.failureRecovery == .settings)
+    #expect(store.statusDetail.contains("could not be verified"))
+    store.changeMode(to: .receive)
+    store.receiveCode = "sample-test-code"
+    #expect(!store.canBeginReceive)
+    store.beginReceive()
+    #expect(store.phase != .completed)
+    #expect(!store.isBusy)
+}
+
+@Test @MainActor func shortCoreCodeErrorReturnsToEditingWithoutDiscardingInput() async throws {
+    let fixture = try await TransferFixture(body: "echo 'code is too short (must be at least 6 characters)'\nexit 1")
+    defer { fixture.cleanup() }
+    let store = fixture.store
+    store.changeMode(to: .receive)
+    store.receiveCode = "abc"
+    store.beginReceive()
+    try await eventually { store.phase.isTerminal }
+    #expect(store.failureRecovery == .editCode)
+    #expect(!store.failureAllowsRetry)
+    store.editTransfer()
+    #expect(store.receiveCode == "abc")
+}
+
+@Test @MainActor func finalCoreErrorIsClassifiedBeforeTransferFinishes() async throws {
+    let fixture = try await TransferFixture(body: """
+    i=0
+    while [ "$i" -lt 1000 ]; do echo "diagnostic $i"; i=$((i + 1)); done
+    printf 'read-only file system'
+    exit 1
+    """)
+    defer { fixture.cleanup() }
+    let store = fixture.store
+    store.changeMode(to: .receive)
+    store.receiveCode = "sample-test-code"
+    for _ in 0..<10 {
+        store.editTransfer()
+        store.beginReceive()
+        try await eventually { store.phase.isTerminal }
+        #expect(store.failureRecovery == .chooseDestination)
+        #expect(store.logLines.contains("read-only file system"))
+    }
+}
+
+@Test @MainActor func fileProgressCanRestartWithoutCompletingTheBatch() async throws {
+    let fixture = try await TransferFixture(body: """
+    echo 'Receiving 2 files (3.0 MB)'
+    echo 'checking-results.zip 100% |████| (1.0/1.0 MB, 10 MB/s)'
+    sleep 0.15
+    echo 'Hashing report.zip 10% |██  | (0.2/2.0 MB, 10 MB/s)'
+    sleep 0.3
+    exit 1
+    """)
+    defer { fixture.cleanup() }
+    let store = fixture.store
+    store.changeMode(to: .receive)
+    store.receiveCode = "sample-test-code"
+    store.beginReceive()
+    try await eventually { store.progress == 1 }
+    #expect(store.phase == .transferring)
+    #expect(store.isFileProgress)
+    #expect(store.currentFileName == "checking-results.zip")
+    #expect(store.receivedItemSummary == "2 files (3.0 MB)")
+    try await eventually { store.progress == 0.1 }
+    #expect(store.phase == .transferring)
+    #expect(store.currentFileName == "Hashing report.zip")
+    store.cancel()
+    #expect(store.progress == nil)
+    #expect(store.progressSnapshot == nil)
+    #expect(!store.isFileProgress)
+    try await eventually { store.phase.isTerminal }
+    #expect(store.phase == .cancelled)
+    store.editTransfer()
+    #expect(store.receivedItemSummary == nil)
+    #expect(store.currentFileName == nil)
+}
+
+@Test @MainActor func disappearingCoreDoesNotLeaveInspectionStuck() async throws {
+    let fixture = try await TransferFixture()
+    defer { fixture.cleanup() }
+    let executable = fixture.directory.appendingPathComponent("delayed-croc")
+    let script = """
+    #!/bin/sh
+    touch "$0.started"
+    echo 'croc version 10.7.0'
+    sleep 0.15
+    """
+    try Data(script.utf8).write(to: executable)
+    try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+    fixture.store.executableOverride = executable.path
+    let startedMarker = URL(fileURLWithPath: executable.path + ".started")
+    try await eventually { FileManager.default.fileExists(atPath: startedMarker.path) }
+    try FileManager.default.removeItem(at: executable)
+    try await eventually { fixture.store.coreInfo.state == .unavailable }
+    #expect(!fixture.store.isCoreReady)
+    #expect(fixture.store.coreReadinessMessage != nil)
 }

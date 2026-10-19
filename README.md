@@ -18,6 +18,10 @@ An independent native SwiftUI GUI for [croc](https://github.com/schollz/croc). T
 - Confirm process exit before reporting cancellation, with a forced-stop fallback for an unresponsive core
 - Show the active croc core version plus completion time, duration, destination, and a Finder shortcut
 - Explain common secure-channel, relay, and destination failures while preserving the full core log
+- Verify the selected croc core before enabling transfers; bound version checks with a timeout and cancellation
+- Read the final core output before settling a transfer result
+- Show received-item summaries and current-file progress without treating one file's 100% as batch completion
+- Direct invalid-code failures back to code editing and show a separate stopping state during cancellation
 - Compact task workspace: select, share the code, track progress, then act on the result
 - Keep the active file, destination, and relay fixed for each attempt; ignore duplicate start actions
 - Include the active custom relay in copied terminal instructions (Windows PowerShell or macOS/Linux shell)
@@ -33,7 +37,7 @@ The bundled `croc` program is distributed under the MIT License. Its copyright n
 
 ## Run from source
 
-Requirements: macOS 14 or newer, Xcode 16 or newer, and a `croc` executable.
+Requirements: macOS 14 or newer, Swift 6.2 or newer through Xcode, and a `croc` executable.
 
 ```sh
 brew install croc
@@ -72,8 +76,8 @@ CROC_CORE=/absolute/path/to/croc ./scripts/package-app.sh
 
 Set `CROC_PACKAGE_OUTPUT_DIR` to a separate directory to preserve an existing package while creating a trial build. Local trial packages are ad-hoc signed, not notarized releases.
 
-The current source revision is 0.3.1 (build 10), with settings usability fixes.
-See the [0.3.1 notes](RELEASE_NOTES_V0.3.1.md) for changes and validation boundaries.
+The current release is 0.3.2 (build 11), with transfer reliability and interaction fixes.
+See the [0.3.2 notes](RELEASE_NOTES_V0.3.2.md) for changes and validation boundaries.
 
 ## Download and install
 
@@ -81,7 +85,7 @@ Download the latest signed and notarized build from [GitHub Releases](https://gi
 
 Open the DMG and drag `croc.app` to Applications. The ZIP contains the same notarized application for users who prefer a direct archive.
 
-Release `v0.3.1` is signed with Developer ID team `A5L4GGX82X`, accepted by Apple's notarization service, and validated by Gatekeeper as `Notarized Developer ID`. See the [release notes](RELEASE_NOTES_V0.3.1.md).
+Release [`v0.3.2`](https://github.com/xiaomao361/croc-gui/releases/tag/v0.3.2) is signed with Developer ID team `A5L4GGX82X`, accepted by Apple's notarization service, and validated by Gatekeeper as `Notarized Developer ID`. See the [release notes](RELEASE_NOTES_V0.3.2.md).
 
 ## Create a signed release
 
